@@ -214,6 +214,18 @@ styled_df = df_result.style \
         subset=["수량", "평단", "현재가", "평가액", "수익률", "비중(%)"],
         **{"text-align": "right"}
     ) \
+    .format({
+        "수량": "{:.0f}",
+        "평단": "{:.0f}",
+        "현재가": "{:.0f}",
+        "평가액": "{:.0f}",
+        "수익률": "{:.1f}",
+        "비중(%)": "{:.1f}"
+    }) \
     .map(color_profit, subset=["수익률"])
+
+st.dataframe(styled_df)
+
+
 st.markdown("### 📋 보유 종목 현황")
 st.dataframe(styled_df)
