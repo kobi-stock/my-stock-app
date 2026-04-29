@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 # -------------------------------
 # 📱 화면 폭 제한
 # -------------------------------
-st.set_page_config(layout="wide") # 전체 화면 활용을 위해 추가
 st.markdown("""
 <style>
 .main .block-container {
