@@ -6,7 +6,7 @@ import os
 import json
 
 # -------------------------------
-# 💾 예수금 영구 저장 기능 (JSON 파일 이용)
+# 💾 예수금 영구 저장 기능
 # -------------------------------
 CASH_FILE = "cash_data.json"
 
@@ -47,7 +47,7 @@ file_options = {
 existing_files = {name: path for name, path in file_options.items() if os.path.exists(path)}
 
 if not existing_files:
-    st.error("❗ 엑셀 파일(trade_log.xlsx)이 존재하지 않습니다.")
+    st.error("❗ 엑셀 파일이 존재하지 않습니다.")
     st.stop()
 
 selected_account = st.sidebar.selectbox("계좌를 선택하세요", ["전체 계좌"] + list(existing_files.keys()))
@@ -60,19 +60,17 @@ else:
 st.title(f"📊 {selected_account} 포트폴리오")
 
 # -------------------------------
-# 💰 예수금 처리 (영구 저장 반영)
+# 💰 예수금 처리
 # -------------------------------
 cash_data = load_cash_data()
 
 if selected_account == "전체 계좌":
-    # 전체 계좌일 때는 각 계좌 저장액의 합산 (수정 불가)
     total_saved_cash = sum([cash_data.get(acc, 1000000) for acc in existing_files.keys()])
     cash = total_saved_cash
     st.info(f"💡 전체 계좌의 예수금은 각 개별 계좌 설정값의 합계({cash:,}원)입니다.")
 else:
-    # 개별 계좌일 때 입력 및 즉시 저장
     saved_val = cash_data.get(selected_account, 1000000)
-    cash_input = st.number_input(f"💰 {selected_account} 예수금 설정 (입력 시 자동 저장)", value=saved_val, step=10000)
+    cash_input = st.number_input(f"💰 {selected_account} 예수금 설정", value=saved_val, step=10000)
     if cash_input != saved_val:
         save_cash_data(selected_account, cash_input)
     cash = cash_input
@@ -113,15 +111,18 @@ for _, row in df.iterrows():
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
+# 현재가 입력창
 st.markdown("### 💹 실시간 시세")
 price_dict = {}
-cols = st.columns(4)
-for i, name in enumerate(active_stocks):
-    avg_p = portfolio[name]["total_buy"] / portfolio[name]["qty"]
-    auto_p = get_price(code_map.get(name, "000000"))
-    with cols[i % 4]:
-        price_dict[name] = st.number_input(name, value=int(auto_p) if auto_p > 0 else int(avg_p), key=f"p_{selected_account}_{name}")
+if active_stocks:
+    cols = st.columns(4)
+    for i, name in enumerate(active_stocks):
+        avg_p = portfolio[name]["total_buy"] / portfolio[name]["qty"]
+        auto_p = get_price(code_map.get(name, "000000"))
+        with cols[i % 4]:
+            price_dict[name] = st.number_input(name, value=int(auto_p) if auto_p > 0 else int(avg_p), key=f"p_{selected_account}_{name}")
 
+# 결과 데이터 집계
 result_list = []
 total_eval, total_buy = 0, 0
 for name in active_stocks:
@@ -136,11 +137,6 @@ for name in active_stocks:
 
 total_asset = cash + total_eval
 total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy > 0 else 0
-
-final_data = []
-for r in result_list:
-    weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
-    final_data.append(r + [round(weight, 1)])
 
 # -------------------------------
 # 📊 계좌 요약 (2줄 레이아웃)
@@ -167,18 +163,34 @@ with row2_3:
     st.markdown(card("📊 총 수익률", f"{total_profit_rate:.2f}%", p_color), unsafe_allow_html=True)
 
 # -------------------------------
-# 📋 보유 종목 현황 (컬러 스타일링)
+# 📋 보유 종목 현황 (예수금 비중 포함)
 # -------------------------------
 st.markdown("### 📋 보유 종목 현황")
+
+# 종목별 비중 계산
+final_data = []
+for r in result_list:
+    weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
+    final_data.append(r + [round(weight, 1)])
+
+# 예수금 행 추가 (수량, 평단, 현재가, 수익률은 None 처리)
+cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
+final_data.append(["💰 예수금 합계", None, None, None, int(cash), None, round(cash_weight, 1)])
+
 df_final = pd.DataFrame(final_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
 
 def color_profit(val):
+    if pd.isna(val) or isinstance(val, str): return ''
     color = '#e63946' if val > 0 else '#457b9d' if val < 0 else 'black'
     return f'color: {color};'
 
 styled_df = df_final.style.format({
-    "수량": "{:,.0f}", "평단": "{:,.0f}", "현재가": "{:,.0f}", 
-    "평가액": "{:,.0f}", "수익률": "{:+.2f}%", "비중(%)": "{:.1f}%"
+    "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "평가액": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-",
+    "비중(%)": lambda x: f"{x:.1f}%" if pd.notnull(x) else "0.0%"
 }).map(color_profit, subset=['수익률']).set_properties(**{'text-align': 'right'})
 
 st.dataframe(styled_df, use_container_width=True)
