@@ -2,25 +2,33 @@ import pandas as pd
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import json
 
+# -------------------------------
+# 📱 화면 폭 제한 (모바일/PC 균형)
+# -------------------------------
+st.markdown("""
+<style>
+.main .block-container {
+    max-width: 900px;
+    padding-top: 2rem;
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.title("📊 내 포트폴리오")
 
 # -------------------------------
-# 💰 예수금 불러오기
+# 💰 예수금 (URL 저장 방식)
 # -------------------------------
-if "cash" not in st.session_state:
-    try:
-        with open("cash.json", "r") as f:
-            st.session_state["cash"] = json.load(f)["cash"]
-    except:
-        st.session_state["cash"] = 1000000
+params = st.query_params
+cash = int(params.get("cash", [1000000])[0])
 
-cash = st.number_input("💰 예수금", key="cash")
+cash_input = st.number_input("💰 예수금", value=cash)
 
-with open("cash.json", "w") as f:
-    json.dump({"cash": cash}, f)
+# URL에 저장
+st.query_params["cash"] = str(cash_input)
+
+cash = cash_input
 
 # -------------------------------
 # 📂 엑셀 불러오기
@@ -28,7 +36,7 @@ with open("cash.json", "w") as f:
 df = pd.read_excel("trade_log.xlsx")
 
 # -------------------------------
-# 🔹 종목코드
+# 🔹 종목코드 매핑
 # -------------------------------
 code_map = {}
 for _, row in df.iterrows():
@@ -81,7 +89,6 @@ for _, row in df.iterrows():
 st.markdown("### 💹 현재가")
 
 price_dict = {}
-
 names = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 for i in range(0, len(names), 4):
@@ -132,9 +139,8 @@ total_asset = cash + total_eval
 total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy else 0
 
 # -------------------------------
-# 🎯 ✨ 핵심: 커스텀 요약 UI
+# 📊 계좌 요약 (커스텀 카드)
 # -------------------------------
-
 def card(title, value):
     return f"""
     <div style="
@@ -150,14 +156,12 @@ def card(title, value):
 
 st.markdown("### 📊 계좌 요약")
 
-# 1줄
 c1, c2 = st.columns(2)
 with c1:
     st.markdown(card("💰 예수금", f"{int(cash):,} 원"), unsafe_allow_html=True)
 with c2:
     st.markdown(card("📥 총 매수액", f"{int(total_buy):,} 원"), unsafe_allow_html=True)
 
-# 2줄
 c3, c4, c5 = st.columns(3)
 with c3:
     st.markdown(card("📈 총 평가액", f"{int(total_eval):,} 원"), unsafe_allow_html=True)
@@ -170,7 +174,7 @@ with c5:
         unsafe_allow_html=True)
 
 # -------------------------------
-# 📋 테이블
+# 📋 테이블 출력
 # -------------------------------
 df_result = pd.DataFrame(result, columns=[
     "종목", "수량", "평단", "현재가", "평가액", "수익률"
