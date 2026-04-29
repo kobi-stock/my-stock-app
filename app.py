@@ -12,6 +12,20 @@ st.markdown("""
     max-width: 900px;
     padding-top: 2rem;
 }
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+th, td {
+    padding: 6px;
+    border-bottom: 1px solid #ddd;
+}
+th {
+    text-align: center;
+}
+td.num {
+    text-align: right;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,7 +99,7 @@ for _, row in df.iterrows():
             portfolio[name]["total_buy"] = 0
 
 # -------------------------------
-# 💹 현재가 입력 (가로 배치)
+# 💹 현재가 입력
 # -------------------------------
 st.markdown("### 💹 현재가")
 
@@ -97,7 +111,6 @@ for i in range(0, len(names), 4):
     for j, name in enumerate(names[i:i+4]):
         data = portfolio[name]
         avg_price = data["total_buy"] / data["qty"]
-
         auto_price = get_price(code_map.get(name, "000000"))
 
         with cols[j]:
@@ -111,7 +124,7 @@ for i in range(0, len(names), 4):
 # -------------------------------
 # 📊 계산
 # -------------------------------
-result = []
+rows = []
 total_eval = 0
 total_buy = sum([d["total_buy"] for d in portfolio.values()])
 
@@ -127,114 +140,53 @@ for name, data in portfolio.items():
 
     profit_rate = (current_price - avg_price) / avg_price * 100 if avg_price else 0
 
-    result.append([
-        name,
-        data["qty"],
-        int(avg_price),
-        current_price,
-        int(eval_amount),
-        round(profit_rate, 2)
-    ])
+    rows.append({
+        "종목": name,
+        "수량": data["qty"],
+        "평단": avg_price,
+        "현재가": current_price,
+        "평가액": eval_amount,
+        "수익률": profit_rate
+    })
 
 total_asset = cash + total_eval
 total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy else 0
 
 # -------------------------------
-# 📊 비중 계산 + 예수금 포함
+# 📊 계좌 요약
 # -------------------------------
-final_result = []
-
-for row in result:
-    eval_amount = row[4]
-    weight = (eval_amount / total_asset * 100) if total_asset > 0 else 0
-    final_result.append(row + [round(weight, 2)])
-
-cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
-
-final_result.append([
-    "💰 예수금",
-    "",
-    "",
-    "",
-    int(cash),
-    "",
-    round(cash_weight, 2)
-])
-
-# -------------------------------
-# 📊 계좌 요약 카드
-# -------------------------------
-def card(title, value):
-    return f"""
-    <div style="
-        padding:8px;
-        border:1px solid #ddd;
-        border-radius:8px;
-        margin-bottom:5px;
-        background:#fafafa">
-        <div style="font-size:12px; color:gray">{title}</div>
-        <div style="font-size:18px; font-weight:bold">{value}</div>
-    </div>
-    """
-
 st.markdown("### 📊 계좌 요약")
 
-c1, c2 = st.columns(2)
-with c1:
-    st.markdown(card("💰 예수금", f"{int(cash):,} 원"), unsafe_allow_html=True)
-with c2:
-    st.markdown(card("📥 총 매수액", f"{int(total_buy):,} 원"), unsafe_allow_html=True)
+col1, col2, col3 = st.columns(3)
 
-c3, c4, c5 = st.columns(3)
-with c3:
-    st.markdown(card("📈 총 평가액", f"{int(total_eval):,} 원"), unsafe_allow_html=True)
-with c4:
-    st.markdown(card("🏦 총 자산", f"{int(total_asset):,} 원"), unsafe_allow_html=True)
-with c5:
-    color = "red" if total_profit_rate > 0 else "blue"
-    st.markdown(card("📊 총 수익률",
-        f"<span style='color:{color}'>{round(total_profit_rate,2)}%</span>"),
-        unsafe_allow_html=True)
+col1.metric("💰 예수금", f"{cash:,} 원")
+col2.metric("🏦 총 자산", f"{int(total_asset):,} 원")
+col3.metric("📊 총 수익률", f"{round(total_profit_rate,1)}%")
 
 # -------------------------------
-# 📋 테이블 (안전 포맷 + 정렬)
+# 📋 HTML 테이블 출력 (정렬 완벽 적용)
 # -------------------------------
-df_result = pd.DataFrame(final_result, columns=[
-    "종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"
-])
-
-def safe_int(x):
-    try:
-        return f"{int(x):,}"
-    except:
-        return x
-
-def safe_float1(x):
-    try:
-        return f"{float(x):.1f}"
-    except:
-        return x
-
-def color_profit(val):
-    try:
-        return "color:red" if float(val) > 0 else "color:blue"
-    except:
-        return ""
-
-styled_df = df_result.style \
-    .set_properties(
-        subset=["수량", "평단", "현재가", "평가액", "수익률", "비중(%)"],
-        **{"text-align": "right"}
-    ) \
-    .format({
-        "수량": safe_int,
-        "평단": safe_int,
-        "현재가": safe_int,
-        "평가액": safe_int,
-        "수익률": safe_float1,
-        "비중(%)": safe_float1
-    }) \
-    .map(color_profit, subset=["수익률"])
-
 st.markdown("### 📋 보유 종목 현황")
-st.dataframe(styled_df)
+
+html = "<table>"
+html += "<tr><th>종목</th><th>수량</th><th>평단</th><th>현재가</th><th>평가액</th><th>수익률</th><th>비중</th></tr>"
+
+for r in rows:
+    weight = (r["평가액"] / total_asset * 100) if total_asset else 0
+    color = "red" if r["수익률"] > 0 else "blue"
+
+    html += f"""
+    <tr>
+        <td>{r['종목']}</td>
+        <td class='num'>{int(r['수량']):,}</td>
+        <td class='num'>{int(r['평단']):,}</td>
+        <td class='num'>{int(r['현재가']):,}</td>
+        <td class='num'>{int(r['평가액']):,}</td>
+        <td class='num' style='color:{color}'>{r['수익률']:.1f}%</td>
+        <td class='num'>{weight:.1f}%</td>
+    </tr>
+    """
+
+html += "</table>"
+
+st.markdown(html, unsafe_allow_html=True)
