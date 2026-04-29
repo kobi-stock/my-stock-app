@@ -5,6 +5,9 @@ from bs4 import BeautifulSoup
 import os
 import json
 
+# 데이터 로드 직후에 추가해서 확인용으로 사용
+df = pd.read_excel(target_file)
+st.write("불러온 데이터 미리보기:", df.head()) # 이 줄을 추가해서 데이터가 나오는지 확인
 # -------------------------------
 # 💾 데이터 저장 및 로드 (예수금 + 수동 현재가)
 # -------------------------------
