@@ -6,10 +6,11 @@ from bs4 import BeautifulSoup
 # -------------------------------
 # 📱 화면 폭 제한
 # -------------------------------
+st.set_page_config(layout="wide") # 전체 화면 활용을 위해 추가
 st.markdown("""
 <style>
 .main .block-container {
-    max-width: 900px;
+    max-width: 1000px;
     padding-top: 2rem;
 }
 </style>
@@ -27,14 +28,18 @@ try:
 except:
     cash = 1000000
 
-cash_input = st.number_input("💰 예수금", value=cash)
+cash_input = st.number_input("💰 예수금", value=cash, step=10000)
 st.query_params["cash"] = str(cash_input)
 cash = cash_input
 
 # -------------------------------
 # 📂 엑셀 불러오기
 # -------------------------------
-df = pd.read_excel("trade_log.xlsx")
+try:
+    df = pd.read_excel("trade_log.xlsx")
+except FileNotFoundError:
+    st.error("trade_log.xlsx 파일을 찾을 수 없습니다.")
+    st.stop()
 
 # -------------------------------
 # 🔹 종목코드 매핑
@@ -46,6 +51,7 @@ for _, row in df.iterrows():
 # -------------------------------
 # 🔹 현재가 가져오기
 # -------------------------------
+@st.cache_data(ttl=60) # 1분간 캐싱하여 속도 향상
 def get_price(code):
     try:
         url = f"https://finance.naver.com/item/main.nhn?code={code}"
@@ -73,13 +79,12 @@ for _, row in df.iterrows():
     if action == "매수":
         portfolio[name]["qty"] += qty
         portfolio[name]["total_buy"] += qty * price
-
     elif action == "매도":
         if portfolio[name]["qty"] > 0:
             avg_price = portfolio[name]["total_buy"] / portfolio[name]["qty"]
             portfolio[name]["qty"] -= qty
             portfolio[name]["total_buy"] -= avg_price * qty
-
+        
         if portfolio[name]["qty"] <= 0:
             portfolio[name]["qty"] = 0
             portfolio[name]["total_buy"] = 0
@@ -87,154 +92,114 @@ for _, row in df.iterrows():
 # -------------------------------
 # 💹 현재가 입력 (가로 배치)
 # -------------------------------
-st.markdown("### 💹 현재가")
+st.markdown("### 💹 현재가 확인 및 수정")
 
 price_dict = {}
-names = [n for n, d in portfolio.items() if d["qty"] > 0]
+active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
-for i in range(0, len(names), 4):
-    cols = st.columns(4)
-    for j, name in enumerate(names[i:i+4]):
-        data = portfolio[name]
-        avg_price = data["total_buy"] / data["qty"]
-
-        auto_price = get_price(code_map.get(name, "000000"))
-
-        with cols[j]:
-            price = st.number_input(
-                name,
-                value=int(auto_price) if auto_price > 0 else int(avg_price),
-                key=f"price_{name}"
-            )
-            price_dict[name] = price
+# 4열로 배치
+cols = st.columns(4)
+for i, name in enumerate(active_stocks):
+    data = portfolio[name]
+    avg_price = data["total_buy"] / data["qty"]
+    auto_price = get_price(code_map.get(name, "000000"))
+    
+    with cols[i % 4]:
+        price = st.number_input(
+            name,
+            value=int(auto_price) if auto_price > 0 else int(avg_price),
+            key=f"price_{name}",
+            step=100
+        )
+        price_dict[name] = price
 
 # -------------------------------
-# 📊 계산
+# 📊 데이터 집계
 # -------------------------------
-result = []
+result_data = []
 total_eval = 0
-total_buy = sum([d["total_buy"] for d in portfolio.values()])
+total_buy = sum([d["total_buy"] for d in portfolio.values() if d["qty"] > 0])
 
-for name, data in portfolio.items():
-    if data["qty"] == 0:
-        continue
-
+for name in active_stocks:
+    data = portfolio[name]
     avg_price = data["total_buy"] / data["qty"]
     current_price = price_dict[name]
-
     eval_amount = data["qty"] * current_price
     total_eval += eval_amount
-
+    
     profit_rate = (current_price - avg_price) / avg_price * 100 if avg_price else 0
 
-    result.append([
-        name,
-        data["qty"],
-        int(avg_price),
-        current_price,
-        int(eval_amount),
-        round(profit_rate, 2)
-    ])
+    result_data.append({
+        "종목": name,
+        "수량": data["qty"],
+        "평단": int(avg_price),
+        "현재가": current_price,
+        "평가액": int(eval_amount),
+        "수익률": round(profit_rate, 2)
+    })
 
 total_asset = cash + total_eval
-total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy else 0
+total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy > 0 else 0
 
-# -------------------------------
-# 📊 비중 계산 + 예수금 포함
-# -------------------------------
-final_result = []
-
-for row in result:
-    eval_amount = row[4]
-    weight = (eval_amount / total_asset * 100) if total_asset > 0 else 0
-    final_result.append(row + [round(weight, 2)])
-
-cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
-
-final_result.append([
-    "💰 예수금",
-    "",
-    "",
-    "",
-    int(cash),
-    "",
-    round(cash_weight, 2)
-])
+# 비중 계산 및 예수금 행 추가
+for row in result_data:
+    row["비중(%)"] = round((row["평가액"] / total_asset * 100), 2) if total_asset > 0 else 0
 
 # -------------------------------
 # 📊 계좌 요약 카드
 # -------------------------------
 def card(title, value):
     return f"""
-    <div style="
-        padding:8px;
-        border:1px solid #ddd;
-        border-radius:8px;
-        margin-bottom:5px;
-        background:#fafafa">
-        <div style="font-size:12px; color:gray">{title}</div>
-        <div style="font-size:18px; font-weight:bold">{value}</div>
+    <div style="padding:10px; border:1px solid #ddd; border-radius:8px; background:#fafafa; text-align:center;">
+        <div style="font-size:13px; color:gray">{title}</div>
+        <div style="font-size:20px; font-weight:bold">{value}</div>
     </div>
     """
 
+st.markdown("---")
 st.markdown("### 📊 계좌 요약")
 
-c1, c2 = st.columns(2)
-with c1:
-    st.markdown(card("💰 예수금", f"{int(cash):,} 원"), unsafe_allow_html=True)
-with c2:
-    st.markdown(card("📥 총 매수액", f"{int(total_buy):,} 원"), unsafe_allow_html=True)
-
-c3, c4, c5 = st.columns(3)
-with c3:
-    st.markdown(card("📈 총 평가액", f"{int(total_eval):,} 원"), unsafe_allow_html=True)
-with c4:
-    st.markdown(card("🏦 총 자산", f"{int(total_asset):,} 원"), unsafe_allow_html=True)
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
+with c2: st.markdown(card("📥 총 매수액", f"{int(total_buy):,}원"), unsafe_allow_html=True)
+with c3: st.markdown(card("📈 총 평가액", f"{int(total_eval):,}원"), unsafe_allow_html=True)
+with c4: st.markdown(card("🏦 총 자산", f"{int(total_asset):,}원"), unsafe_allow_html=True)
 with c5:
-    color = "red" if total_profit_rate > 0 else "blue"
-    st.markdown(card("📊 총 수익률",
-        f"<span style='color:{color}'>{round(total_profit_rate,2)}%</span>"),
-        unsafe_allow_html=True)
+    color = "#e63946" if total_profit_rate > 0 else "#457b9d"
+    st.markdown(card("📊 총 수익률", f"<span style='color:{color}'>{total_profit_rate:.2f}%</span>"), unsafe_allow_html=True)
 
 # -------------------------------
-# 📋 테이블 (안전 포맷 + 정렬)
+# 📋 보유 종목 현황 테이블
 # -------------------------------
-df_result = pd.DataFrame(final_result, columns=[
-    "종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"
-])
-
-def safe_int(x):
-    try:
-        return f"{int(x):,}"
-    except:
-        return x
-
-def safe_float1(x):
-    try:
-        return f"{float(x):.1f}"
-    except:
-        return x
-
-def color_profit(val):
-    try:
-        return "color:red" if float(val) > 0 else "color:blue"
-    except:
-        return ""
-
-styled_df = df_result.style \
-    .set_properties(
-        subset=["수량", "평단", "현재가", "평가액", "수익률", "비중(%)"],
-        **{"text-align": "right"}
-    ) \
-    .format({
-        "수량": safe_int,
-        "평단": safe_int,
-        "현재가": safe_int,
-        "평가액": safe_int,
-        "수익률": safe_float1,
-        "비중(%)": safe_float1
-    }) \
-    .map(color_profit, subset=["수익률"])
-
 st.markdown("### 📋 보유 종목 현황")
-st.dataframe(styled_df)
+
+df_result = pd.DataFrame(result_data)
+
+# 예수금 행 데이터 생성
+cash_row = pd.DataFrame([{
+    "종목": "💰 예수금",
+    "수량": None,
+    "평단": None,
+    "현재가": None,
+    "평가액": int(cash),
+    "수익률": None,
+    "비중(%)": round((cash / total_asset * 100), 2) if total_asset > 0 else 0
+}])
+
+df_final = pd.concat([df_result, cash_row], ignore_index=True)
+
+# 컬럼 설정 (우측 정렬 및 포맷팅 핵심 부분)
+st.dataframe(
+    df_final,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "종목": st.column_config.TextColumn("종목", width="medium"),
+        "수량": st.column_config.NumberColumn("수량", format="%d"),
+        "평단": st.column_config.NumberColumn("평단", format="%d"),
+        "현재가": st.column_config.NumberColumn("현재가", format="%d"),
+        "평가액": st.column_config.NumberColumn("평가액", format="%d"),
+        "수익률": st.column_config.NumberColumn("수익률", format="%.2f%%"),
+        "비중(%)": st.column_config.NumberColumn("비중(%)", format="%.1f%%"),
+    }
+)
