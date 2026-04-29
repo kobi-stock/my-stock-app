@@ -197,11 +197,23 @@ with c5:
         unsafe_allow_html=True)
 
 # -------------------------------
-# 📋 테이블 (오른쪽 정렬 + 색상)
+# 📋 테이블 (안전 포맷 + 정렬)
 # -------------------------------
 df_result = pd.DataFrame(final_result, columns=[
     "종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"
 ])
+
+def safe_int(x):
+    try:
+        return f"{int(x):,}"
+    except:
+        return x
+
+def safe_float1(x):
+    try:
+        return f"{float(x):.1f}"
+    except:
+        return x
 
 def color_profit(val):
     try:
@@ -215,17 +227,14 @@ styled_df = df_result.style \
         **{"text-align": "right"}
     ) \
     .format({
-        "수량": "{:.0f}",
-        "평단": "{:.0f}",
-        "현재가": "{:.0f}",
-        "평가액": "{:.0f}",
-        "수익률": "{:.1f}",
-        "비중(%)": "{:.1f}"
+        "수량": safe_int,
+        "평단": safe_int,
+        "현재가": safe_int,
+        "평가액": safe_int,
+        "수익률": safe_float1,
+        "비중(%)": safe_float1
     }) \
     .map(color_profit, subset=["수익률"])
-
-st.dataframe(styled_df)
-
 
 st.markdown("### 📋 보유 종목 현황")
 st.dataframe(styled_df)
