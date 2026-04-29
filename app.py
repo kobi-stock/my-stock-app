@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 # -------------------------------
 # 📱 화면 구성 설정
 # -------------------------------
-st.set_page_config(layout="wide")
 st.markdown("""
 <style>
 .main .block-container {
