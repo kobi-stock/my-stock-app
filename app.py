@@ -21,7 +21,7 @@ st.title("📊 내 포트폴리오")
 # 💰 예수금 (URL 저장 방식)
 # -------------------------------
 params = st.query_params
-cash = int(params.get("cash", [1000000])[0])
+cash = int(params.get("cash", 1000000))
 
 cash_input = st.number_input("💰 예수금", value=cash)
 
