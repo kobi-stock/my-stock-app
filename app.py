@@ -47,7 +47,7 @@ file_options = {
 existing_files = {name: path for name, path in file_options.items() if os.path.exists(path)}
 
 if not existing_files:
-    st.error("❗ 엑셀 파일이 존재하지 않습니다.")
+    st.error("❗ 엑셀 파일(trade_log.xlsx)이 존재하지 않습니다.")
     st.stop()
 
 selected_account = st.sidebar.selectbox("계좌를 선택하세요", ["전체 계좌"] + list(existing_files.keys()))
@@ -136,10 +136,11 @@ for name in active_stocks:
     result_list.append([name, d["qty"], int(avg_p), curr_p, int(eval_amt), round(profit_r, 2)])
 
 total_asset = cash + total_eval
+total_profit_amt = total_eval - total_buy # 총 수익 금액
 total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy > 0 else 0
 
 # -------------------------------
-# 📊 계좌 요약 (2줄 레이아웃)
+# 📊 계좌 요약 (수익 금액 추가)
 # -------------------------------
 def card(title, value, color="black"):
     return f"""
@@ -151,29 +152,33 @@ def card(title, value, color="black"):
 
 st.markdown("---")
 st.markdown("### 📊 계좌 요약")
-row1_1, row1_2 = st.columns(2)
+
+# 첫 번째 줄: 예수금, 총 매수액, 총 수익(추가됨)
+row1_1, row1_2, row1_3 = st.columns(3)
 with row1_1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
 with row1_2: st.markdown(card("📥 총 매수액", f"{int(total_buy):,}원"), unsafe_allow_html=True)
+with row1_3: 
+    amt_color = "#e63946" if total_profit_amt > 0 else "#457b9d" if total_profit_amt < 0 else "black"
+    st.markdown(card("💵 총 수익", f"{int(total_profit_amt):+,}원", amt_color), unsafe_allow_html=True)
 
+# 두 번째 줄: 총 평가액, 총 자산, 총 수익률
 row2_1, row2_2, row2_3 = st.columns(3)
 with row2_1: st.markdown(card("📈 총 평가액", f"{int(total_eval):,}원"), unsafe_allow_html=True)
 with row2_2: st.markdown(card("🏦 총 자산", f"{int(total_asset):,}원"), unsafe_allow_html=True)
 with row2_3: 
-    p_color = "#e63946" if total_profit_rate > 0 else "#457b9d" if total_profit_rate < 0 else "black"
-    st.markdown(card("📊 총 수익률", f"{total_profit_rate:.2f}%", p_color), unsafe_allow_html=True)
+    rate_color = "#e63946" if total_profit_rate > 0 else "#457b9d" if total_profit_rate < 0 else "black"
+    st.markdown(card("📊 총 수익률", f"{total_profit_rate:+.2f}%", rate_color), unsafe_allow_html=True)
 
 # -------------------------------
 # 📋 보유 종목 현황 (예수금 비중 포함)
 # -------------------------------
 st.markdown("### 📋 보유 종목 현황")
 
-# 종목별 비중 계산
 final_data = []
 for r in result_list:
     weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
     final_data.append(r + [round(weight, 1)])
 
-# 예수금 행 추가 (수량, 평단, 현재가, 수익률은 None 처리)
 cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
 final_data.append(["💰 예수금 합계", None, None, None, int(cash), None, round(cash_weight, 1)])
 
