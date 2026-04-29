@@ -7,7 +7,6 @@ import os
 # -------------------------------
 # 📱 화면 구성 설정
 # -------------------------------
-st.set_page_config(layout="wide", page_title="내 주식 포트폴리오")
 st.markdown("""
 <style>
 .main .block-container {
