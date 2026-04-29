@@ -6,7 +6,7 @@ import os
 import json
 
 # -------------------------------
-# 💾 1. 데이터 저장/로드 함수 (항상 최상단)
+# 💾 1. 데이터 저장 및 로드 (예수금 + 수동 현재가)
 # -------------------------------
 DATA_FILE = "portfolio_data.json"
 
@@ -24,9 +24,9 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # -------------------------------
-# 📱 2. 화면 설정
+# 📱 2. 화면 구성 및 스타일
 # -------------------------------
-st.set_page_config(page_title="주식 포트폴리오", layout="centered")
+st.set_page_config(page_title="주식 포트폴리오 관리", layout="centered")
 st.markdown("""
 <style>
 .main .block-container { max-width: 900px; padding-top: 2rem; }
@@ -35,51 +35,63 @@ div.stNumberInput > label { font-weight: bold; }
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# 📂 3. 계좌 및 파일 설정
+# 📂 3. 파일 업로드 및 계좌 선택 (사이드바)
 # -------------------------------
+st.sidebar.title("📂 데이터 업로드")
+# 실시간으로 엑셀 파일을 올릴 수 있는 위젯
+uploaded_file = st.sidebar.file_uploader("수정된 엑셀 파일을 여기에 올리세요", type=["xlsx"])
+
+st.sidebar.markdown("---")
 st.sidebar.title("📂 계좌 관리")
 file_options = {
     "기본 계좌": "trade_log.xlsx",
     "한국투자증권": "trade_log_한투.xlsx"
 }
 
-# 실제 존재하는 파일만 필터링
+# 기본적으로 서버에 있는 파일들 확인
 existing_files = {name: path for name, path in file_options.items() if os.path.exists(path)}
+selected_account = st.sidebar.selectbox("관리할 계좌를 선택하세요", ["전체 계좌"] + list(file_options.keys()))
 
-if not existing_files:
-    st.error("❗ 실행 폴더에 엑셀 파일이 없습니다. 파일명을 확인해 주세요.")
-    st.info(f"현재 인식 가능한 파일: {list(file_options.values())}")
-    st.stop()
-
-selected_account = st.sidebar.selectbox("계좌를 선택하세요", ["전체 계좌"] + list(existing_files.keys()))
 db = load_data()
 
 # -------------------------------
-# 📂 4. 데이터 로드 (target_file 에러 해결)
+# 📂 4. 데이터 로드 로직 (업로드 파일 우선)
 # -------------------------------
 try:
-    if selected_account == "전체 계좌":
-        df_list = [pd.read_excel(path) for path in existing_files.values()]
-        df = pd.concat(df_list, ignore_index=True)
+    if uploaded_file is not None:
+        # 1순위: 사용자가 방금 업로드한 파일 사용
+        df = pd.read_excel(uploaded_file)
+        st.sidebar.success("✅ 업로드된 파일을 사용 중입니다.")
     else:
-        # 이 위치에서 target_file이 정의됩니다.
-        target_file = existing_files[selected_account]
-        df = pd.read_excel(target_file)
+        # 2순위: 업로드된 파일이 없으면 서버(GitHub)에 있는 파일 사용
+        if selected_account == "전체 계좌":
+            if not existing_files:
+                st.error("❗ 서버에 저장된 엑셀 파일이 없습니다. 파일을 업로드해 주세요.")
+                st.stop()
+            df_list = [pd.read_excel(path) for path in existing_files.values()]
+            df = pd.concat(df_list, ignore_index=True)
+        else:
+            target_path = file_options[selected_account]
+            if os.path.exists(target_path):
+                df = pd.read_excel(target_path)
+            else:
+                st.warning(f"⚠️ '{selected_account}'에 해당하는 기본 파일이 서버에 없습니다. 엑셀을 업로드해 주세요.")
+                st.stop()
 except Exception as e:
-    st.error(f"엑셀 파일을 읽는 중 오류가 발생했습니다: {e}")
+    st.error(f"엑셀을 읽는 중 에러가 발생했습니다: {e}")
     st.stop()
 
-# 🔍 데이터 확인용 (문제가 있을 때 열어서 확인하세요)
-with st.expander("📝 엑셀 데이터 원본 확인"):
+# 🔍 원본 확인용 (문제가 있을 때만 열어보세요)
+with st.expander("📝 현재 적용 중인 엑셀 데이터 원본 확인"):
     st.write(df)
 
 st.title(f"📊 {selected_account} 포트폴리오")
 
 # -------------------------------
-# 💰 5. 예수금 처리
+# 💰 5. 예수금 처리 (영구 저장)
 # -------------------------------
 if selected_account == "전체 계좌":
-    cash = sum([db["cash"].get(acc, 1000000) for acc in existing_files.keys()])
+    cash = sum([db["cash"].get(acc, 0) for acc in file_options.keys()])
     st.info(f"💡 합산 예수금: {cash:,}원 (개별 계좌 화면에서 수정 가능)")
 else:
     saved_cash = db["cash"].get(selected_account, 1000000)
@@ -91,7 +103,7 @@ else:
 # -------------------------------
 # 🔹 6. 시세 크롤링 함수
 # -------------------------------
-@st.cache_data(ttl=10) # 10초 캐시
+@st.cache_data(ttl=10)
 def get_price(code):
     try:
         url = f"https://finance.naver.com/item/main.nhn?code={code}"
@@ -103,11 +115,11 @@ def get_price(code):
         return 0
 
 # -------------------------------
-# 📊 7. 포트폴리오 계산 logic
+# 📊 7. 포트폴리오 계산
 # -------------------------------
 portfolio = {}
-try:
-    for _, row in df.iterrows():
+for _, row in df.iterrows():
+    try:
         name, qty, p, action = row["종목"], row["수량"], row["가격"], row["구분"]
         code = str(row["코드"]).zfill(6)
         
@@ -122,9 +134,8 @@ try:
                 avg_p = portfolio[name]["total_buy"] / portfolio[name]["qty"]
                 portfolio[name]["qty"] -= qty
                 portfolio[name]["total_buy"] -= avg_p * qty
-except Exception as e:
-    st.error(f"데이터 계산 중 오류 발생. 엑셀 컬럼명(종목, 코드, 수량, 가격, 구분)을 확인하세요: {e}")
-    st.stop()
+    except:
+        continue
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
@@ -140,7 +151,7 @@ if active_stocks:
         saved_p = db["manual_prices"].get(name)
         auto_p = get_price(data["code"])
         
-        # 저장된 값 > 크롤링 값 > 평단가 순으로 기본값 설정
+        # 저장값 > 크롤링값 > 평단가 순
         init_val = saved_p if saved_p else (auto_p if auto_p > 0 else int(data["total_buy"]/data["qty"]))
         
         with cols[i % 4]:
@@ -150,14 +161,13 @@ if active_stocks:
                 save_data(db)
             price_dict[name] = p_input
 else:
-    st.write("보유 중인 종목이 없습니다.")
+    st.info("현재 보유 중인 종목이 없습니다. 엑셀 파일을 업로드하거나 계좌를 확인해 주세요.")
 
 # -------------------------------
-# 📊 9. 최종 집계 및 화면 출력
+# 📊 9. 최종 집계 및 요약 출력
 # -------------------------------
 result_list = []
 total_eval, total_buy = 0, 0
-
 for name in active_stocks:
     d = portfolio[name]
     avg_p = d["total_buy"] / d["qty"]
@@ -203,10 +213,7 @@ def color_p(val):
     return f'color: {"#e63946" if val > 0 else "#457b9d" if val < 0 else "black"};'
 
 st.dataframe(df_final.style.format({
-    "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-    "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-    "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-    "평가액": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-    "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-",
-    "비중(%)": lambda x: f"{x:.1f}%" if pd.notnull(x) else "0.0%"
+    "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-", "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-", "평가액": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-", "비중(%)": lambda x: f"{x:.1f}%" if pd.notnull(x) else "0.0%"
 }).map(color_p, subset=['수익률']).set_properties(**{'text-align': 'right'}), use_container_width=True)
