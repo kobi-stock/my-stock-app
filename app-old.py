@@ -32,48 +32,31 @@ div.stNumberInput > label { font-weight: bold; }
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# 📂 계좌 선택 및 데이터 로드 (위치 조정됨)
+# 📂 계좌 선택 및 데이터 로드
 # -------------------------------
 st.sidebar.title("📂 계좌 관리")
 file_options = {
     "기본 계좌": "trade_log.xlsx",
     "한국투자증권": "trade_log_한투.xlsx"
 }
-
-# 실제 파일이 있는지 확인
 existing_files = {name: path for name, path in file_options.items() if os.path.exists(path)}
 
 if not existing_files:
-    st.error("❗ 폴더 내에 엑셀 파일(trade_log.xlsx)이 없습니다. 파일명을 확인해 주세요.")
+    st.error("❗ 엑셀 파일이 존재하지 않습니다.")
     st.stop()
 
 selected_account = st.sidebar.selectbox("계좌를 선택하세요", ["전체 계좌"] + list(existing_files.keys()))
 db = load_data()
 
-# --- 여기서 target_file 결정 ---
-if selected_account == "전체 계좌":
-    df_list = []
-    for acc_name, path in existing_files.items():
-        temp_df = pd.read_excel(path)
-        df_list.append(temp_df)
-    df = pd.concat(df_list, ignore_index=True)
-else:
-    target_file = existing_files[selected_account]
-    df = pd.read_excel(target_file)
-
-# 🔍 [확인용] 엑셀 데이터가 잘 읽히는지 상단에 표시 (나중에 삭제 가능)
-with st.expander("📝 엑셀 데이터 원본 확인"):
-    st.write(df)
-
-st.title(f"📊 {selected_account} 포트폴리오")
-
 # -------------------------------
-# 💰 예수금 처리
+# 💰 예수금 및 현재가 로직
 # -------------------------------
 if selected_account == "전체 계좌":
+    df = pd.concat([pd.read_excel(p) for p in existing_files.values()], ignore_index=True)
     cash = sum([db["cash"].get(acc, 1000000) for acc in existing_files.keys()])
-    st.info(f"💡 합산 예수금: {cash:,}원 (각 계좌 화면에서 수정 가능)")
+    st.info(f"💡 전체 계좌 합산 예수금: {cash:,}원")
 else:
+    df = pd.read_excel(existing_files[selected_account])
     saved_cash = db["cash"].get(selected_account, 1000000)
     cash = st.number_input(f"💰 {selected_account} 예수금 설정", value=saved_cash, step=10000)
     if cash != saved_cash:
@@ -83,19 +66,15 @@ else:
 # -------------------------------
 # 🔹 시세 데이터 크롤링
 # -------------------------------
-# 엑셀의 컬럼명이 '종목', '코드' 인지 반드시 확인하세요!
-try:
-    code_map = {row["종목"]: str(row["코드"]).zfill(6) for _, row in df.iterrows()}
-except KeyError as e:
-    st.error(f"❗ 엑셀 파일의 컬럼명이 일치하지 않습니다. [종목, 코드, 수량, 가격, 구분] 인지 확인하세요. 에러: {e}")
-    st.stop()
+code_map = {row["종목"]: str(row["코드"]).zfill(6) for _, row in df.iterrows()}
 
-@st.cache_data(ttl=10) # 엑셀 수정 확인을 위해 캐시 시간을 10초로 단축
+@st.cache_data(ttl=60)
 def get_price(code):
     try:
         url = f"https://finance.naver.com/item/main.nhn?code={code}"
         res = requests.get(url, timeout=5)
         soup = BeautifulSoup(res.text, "html.parser")
+        # 장마감 후에도 가장 정확한 숫자를 가져오기 위해 상단 현재가 선택
         price_tag = soup.select_one(".no_today .blind")
         return int(price_tag.text.replace(",", "")) if price_tag else 0
     except:
@@ -122,27 +101,30 @@ for _, row in df.iterrows():
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # -------------------------------
-# 💹 현재가 입력 (저장 기능)
+# 💹 현재가 입력 (저장 기능 포함)
 # -------------------------------
-st.markdown("### 💹 실시간 시세 (수동 입력 시 저장)")
+st.markdown("### 💹 실시간 시세 (수동 입력 시 저장됨)")
 price_dict = {}
-if active_stocks:
-    cols = st.columns(4)
-    for i, name in enumerate(active_stocks):
-        avg_p = int(portfolio[name]["total_buy"] / portfolio[name]["qty"])
-        saved_price = db["manual_prices"].get(name)
-        auto_p = get_price(code_map.get(name, "000000"))
+cols = st.columns(4)
+for i, name in enumerate(active_stocks):
+    avg_p = int(portfolio[name]["total_buy"] / portfolio[name]["qty"])
+    
+    # 1. 저장된 수동 가격이 있는지 확인
+    # 2. 없으면 네이버에서 가져옴
+    saved_price = db["manual_prices"].get(name)
+    auto_p = get_price(code_map.get(name, "000000"))
+    
+    initial_val = saved_price if saved_price else (auto_p if auto_p > 0 else avg_p)
+    
+    with cols[i % 4]:
+        # 'p_'를 키에 포함하여 계좌별 입력창 분리
+        price_input = st.number_input(name, value=int(initial_val), key=f"inp_{name}")
         
-        initial_val = saved_price if saved_price else (auto_p if auto_p > 0 else avg_p)
-        
-        with cols[i % 4]:
-            price_input = st.number_input(name, value=int(initial_val), key=f"inp_{name}")
-            if price_input != saved_price:
-                db["manual_prices"][name] = price_input
-                save_data(db)
-            price_dict[name] = price_input
-else:
-    st.write("보유 중인 종목이 없습니다.")
+        # 값이 변경되면 파일에 저장
+        if price_input != saved_price:
+            db["manual_prices"][name] = price_input
+            save_data(db)
+        price_dict[name] = price_input
 
 # -------------------------------
 # 📊 집계 및 요약
@@ -163,6 +145,7 @@ total_asset = cash + total_eval
 total_profit_amt = total_eval - total_buy
 total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy > 0 else 0
 
+# 계좌 요약 카드 함수
 def card(title, value, color="black"):
     return f"""<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;">
     <div style="font-size:12px; color:gray;">{title}</div>
