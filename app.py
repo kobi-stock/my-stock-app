@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 
 # -------------------------------
-# 📱 화면 폭 제한 (모바일/PC 균형)
+# 📱 화면 폭 제한
 # -------------------------------
 st.markdown("""
 <style>
@@ -21,13 +21,14 @@ st.title("📊 내 포트폴리오")
 # 💰 예수금 (URL 저장 방식)
 # -------------------------------
 params = st.query_params
-cash = int(params.get("cash", 1000000))
+
+try:
+    cash = int(params.get("cash", 1000000))
+except:
+    cash = 1000000
 
 cash_input = st.number_input("💰 예수금", value=cash)
-
-# URL에 저장
 st.query_params["cash"] = str(cash_input)
-
 cash = cash_input
 
 # -------------------------------
@@ -139,7 +140,30 @@ total_asset = cash + total_eval
 total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy else 0
 
 # -------------------------------
-# 📊 계좌 요약 (커스텀 카드)
+# 📊 비중 계산 + 예수금 포함
+# -------------------------------
+final_result = []
+
+for row in result:
+    eval_amount = row[4]
+    weight = (eval_amount / total_asset * 100) if total_asset > 0 else 0
+    final_result.append(row + [round(weight, 2)])
+
+# 예수금 추가
+cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
+
+final_result.append([
+    "💰 예수금",
+    "",
+    "",
+    "",
+    int(cash),
+    "",
+    round(cash_weight, 2)
+])
+
+# -------------------------------
+# 📊 계좌 요약 카드
 # -------------------------------
 def card(title, value):
     return f"""
@@ -176,8 +200,8 @@ with c5:
 # -------------------------------
 # 📋 테이블 출력
 # -------------------------------
-df_result = pd.DataFrame(result, columns=[
-    "종목", "수량", "평단", "현재가", "평가액", "수익률"
+df_result = pd.DataFrame(final_result, columns=[
+    "종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"
 ])
 
 st.markdown("### 📋 보유 종목 현황")
