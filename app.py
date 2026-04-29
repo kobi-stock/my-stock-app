@@ -18,7 +18,7 @@ st.markdown("""
 st.title("📊 내 포트폴리오")
 
 # -------------------------------
-# 💰 예수금 (URL 저장 방식)
+# 💰 예수금 (URL 저장)
 # -------------------------------
 params = st.query_params
 
@@ -149,7 +149,6 @@ for row in result:
     weight = (eval_amount / total_asset * 100) if total_asset > 0 else 0
     final_result.append(row + [round(weight, 2)])
 
-# 예수금 추가
 cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
 
 final_result.append([
@@ -198,11 +197,24 @@ with c5:
         unsafe_allow_html=True)
 
 # -------------------------------
-# 📋 테이블 출력
+# 📋 테이블 (오른쪽 정렬 + 색상)
 # -------------------------------
 df_result = pd.DataFrame(final_result, columns=[
     "종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"
 ])
 
+def color_profit(val):
+    try:
+        return "color:red" if float(val) > 0 else "color:blue"
+    except:
+        return ""
+
+styled_df = df_result.style \
+    .set_properties(
+        subset=["수량", "평단", "현재가", "평가액", "수익률", "비중(%)"],
+        **{"text-align": "right"}
+    ) \
+    .applymap(color_profit, subset=["수익률"])
+
 st.markdown("### 📋 보유 종목 현황")
-st.dataframe(df_result)
+st.dataframe(styled_df)
