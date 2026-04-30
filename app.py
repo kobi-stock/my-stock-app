@@ -74,14 +74,20 @@ if df.empty:
 st.title(f"📊 {selected_account} 포트폴리오")
 
 # -------------------------------
-# 💰 5. 예수금 설정
+# 💰 5. 예수금 설정 (합산 로직 수정)[cite: 1]
 # -------------------------------
-acc_key = selected_account if selected_account != "전체 계좌" else "기본 계좌"
-saved_cash = db["cash"].get(acc_key, 1000000)
-cash = st.number_input("💰 현재 예수금 설정", value=int(saved_cash), step=10000)
-if cash != saved_cash:
-    db["cash"][acc_key] = cash
-    save_data(db)
+if selected_account == "전체 계좌":
+    # 각 계좌의 저장된 예수금을 합산 (기본값 0원)
+    total_saved_cash = sum([int(db["cash"].get(acc, 0)) for acc in TAB_INFO.keys()])
+    cash = total_saved_cash
+    st.info(f"💡 전체 계좌 예수금은 각 계좌 화면에서 개별적으로 수정 가능합니다. (현재 합계: {cash:,}원)")
+else:
+    # 개별 계좌일 때만 수정 가능하게 설정
+    saved_cash = db["cash"].get(selected_account, 0)
+    cash = st.number_input(f"💰 {selected_account} 예수금 설정", value=int(saved_cash), step=10000)
+    if cash != saved_cash:
+        db["cash"][selected_account] = cash
+        save_data(db)
 
 # -------------------------------
 # 🔹 6. 실시간 시세 크롤링 함수
@@ -100,7 +106,7 @@ def get_live_price(code):
     except: return 0
 
 # -------------------------------
-# 📊 7. 포트폴리오 계산 logic
+# 📊 7. 포트폴리오 계산 logic[cite: 1]
 # -------------------------------
 portfolio = {}
 try:
@@ -167,7 +173,7 @@ total_profit_amt = total_eval - total_buy_sum
 total_profit_rate = (total_profit_amt / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
 # -------------------------------
-# 🏦 9. 결과 카드 및 테이블 출력 (예수금 추가 수정)
+# 🏦 9. 결과 카드 및 테이블 출력 (예수금/비중 합산 반영)[cite: 1]
 # -------------------------------
 def card(title, value, color="black"):
     return f"""<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;">
@@ -196,9 +202,9 @@ for r in result_list:
     weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
     final_data.append([r[0], r[1], r[2], r[3], r[4], r[5], round(weight, 1)])
 
-# 최하단에 예수금 행 추가[cite: 1]
+# 예수금 비중 계산 및 추가[cite: 1]
 cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
-final_data.append(["💰 예수금", None, None, None, int(cash), None, round(cash_weight, 1)])
+final_data.append(["💰 예수금 합계", None, None, None, int(cash), None, round(cash_weight, 1)])
 
 df_final = pd.DataFrame(final_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
 
