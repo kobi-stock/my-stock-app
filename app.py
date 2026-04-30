@@ -29,7 +29,7 @@ def save_data(data):
 st.set_page_config(page_title="주식 포트폴리오 관리", layout="wide")
 st.markdown("""
 <style>
-.main .block-container { max-width: 1100px; padding-top: 2rem; }
+.main .block-container { max-width: 800px; padding-top: 2rem; }
 div.stNumberInput > label { font-weight: bold; font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
