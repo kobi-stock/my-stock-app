@@ -90,21 +90,34 @@ else:
         save_data(db)
 
 # -------------------------------
-# 🔹 6. 실시간 시세 크롤링 함수
+# 🔹 6. 실시간 시세 크롤링 함수 (최적화 버전)
 # -------------------------------
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=10) # 캐시 주기를 10초로 단축하여 더 자주 갱신
 def get_live_price(code):
     if not code or str(code) == "nan": return 0
     try:
         clean_code = str(code).split('.')[0].zfill(6)
         url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=2)
+        
+        # 브라우저처럼 보이게 하여 차단 가능성 감소
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+        }
+        
+        # timeout을 1.5초로 짧게 잡아 전체 앱이 멈추는 것 방지
+        res = requests.get(url, headers=headers, timeout=1.5)
+        res.raise_for_status() # 응답 에러 확인
+        
         soup = BeautifulSoup(res.text, "html.parser")
+        # 네이버 금융의 현재가 위치 타겟팅
         price_tag = soup.select_one(".no_today .blind")
-        return int(price_tag.text.replace(",", "")) if price_tag else 0
-    except: return 0
-
+        
+        if price_tag:
+            return int(price_tag.text.replace(",", ""))
+        return 0
+    except Exception as e:
+        # 에러 발생 시 로그를 남기지 않고 0 반환 (속도 유지)
+        return 0
 # -------------------------------
 # 📊 7. 포트폴리오 계산 logic[cite: 1]
 # -------------------------------
