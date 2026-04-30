@@ -24,13 +24,15 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # -------------------------------
-# 📱 2. 화면 구성 및 스타일
+# 📱 2. 화면 구성 및 스타일 (중앙 정렬로 수정)
 # -------------------------------
-st.set_page_config(page_title="주식 포트폴리오 관리", layout="wide")
+st.set_page_config(page_title="주식 포트폴리오 관리", layout="centered") # 중앙 정렬로 변경
 st.markdown("""
 <style>
-.main .block-container { max-width: 800px; padding-top: 2rem; }
+.main .block-container { max-width: 850px; padding-top: 2rem; }
 div.stNumberInput > label { font-weight: bold; font-size: 13px; }
+/* 테이블 폰트 크기 조절 */
+.stDataFrame { font-size: 14px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,7 +69,7 @@ if st.sidebar.button("🔄 저장된 수동 가격 초기화"):
     st.sidebar.success("가격이 초기화되었습니다.")
     st.rerun()
 
-# 데이터 로드 로직
+# 데이터 로드
 if selected_account == "전체 계좌":
     dfs = []
     for gid in TAB_INFO.values():
@@ -78,7 +80,7 @@ else:
     df = load_sheet_data(TAB_INFO[selected_account])
 
 if df.empty:
-    st.warning("데이터를 가져올 수 없습니다. 시트를 확인해 주세요.")
+    st.warning("데이터가 없습니다. 시트를 확인해 주세요.")
     st.stop()
 
 # -------------------------------
@@ -98,7 +100,7 @@ def get_live_price(code):
     except: return 0
 
 # -------------------------------
-# 📊 6. 포트폴리오 계산 (날짜 열 무시 로직 포함)
+# 📊 6. 포트폴리오 계산
 # -------------------------------
 portfolio = {}
 for _, row in df.iterrows():
@@ -121,20 +123,21 @@ active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 # -------------------------------
 # 💹 7. 메인 화면 및 현재가 입력
 # -------------------------------
-st.title(f"📊 {selected_account} 현황")
+st.title(f"📊 {selected_account}")
 price_dict = {}
 
 if active_stocks:
     st.markdown("### 💹 현재가 확인")
-    cols = st.columns(4)
+    # 화면이 좁아졌으므로 3열로 배치
+    cols = st.columns(3)
     for i, name in enumerate(active_stocks):
         data = portfolio[name]
         live_p = get_live_price(data["code"])
         saved_p = db["manual_prices"].get(name)
         display_val = saved_p if saved_p else live_p
         
-        with cols[i % 4]:
-            p_input = st.number_input(f"{name} (실시간:{live_p:,})", value=int(display_val), key=f"p_{name}")
+        with cols[i % 3]:
+            p_input = st.number_input(f"{name} ({live_p:,})", value=int(display_val), key=f"p_{name}")
             if p_input != saved_p and p_input != live_p:
                 db["manual_prices"][name] = p_input
                 save_data(db)
@@ -143,8 +146,10 @@ if active_stocks:
     # -------------------------------
     # 💰 8. 예수금 설정
     # -------------------------------
+    st.markdown("---")
     if selected_account == "전체 계좌":
         cash = sum([db["cash"].get(name, 1000000) for name in TAB_INFO.keys()])
+        st.info(f"💡 전체 계좌 합산 예수금: {cash:,}원")
     else:
         saved_cash = db["cash"].get(selected_account, 1000000)
         cash = st.number_input(f"💰 {selected_account} 예수금 설정", value=int(saved_cash), step=10000)
@@ -153,7 +158,7 @@ if active_stocks:
             save_data(db)
 
     # -------------------------------
-    # 📈 9. 요약 통계 계산
+    # 📈 9. 요약 통계 계산 및 카드 출력
     # -------------------------------
     result_list = []
     total_eval, total_buy = 0, 0
@@ -172,11 +177,10 @@ if active_stocks:
     total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy > 0 else 0
 
     def card(title, value, color="black"):
-        return f"""<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;">
-        <div style="font-size:12px; color:gray;">{title}</div>
-        <div style="font-size:18px; font-weight:bold; color:{color};">{value}</div></div>"""
+        return f"""<div style="padding:8px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:3px;">
+        <div style="font-size:11px; color:gray;">{title}</div>
+        <div style="font-size:16px; font-weight:bold; color:{color};">{value}</div></div>"""
 
-    st.markdown("---")
     c1, c2, c3 = st.columns(3)
     with c1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
     with c2: st.markdown(card("📥 총 매수액", f"{int(total_buy):,}원"), unsafe_allow_html=True)
@@ -192,27 +196,23 @@ if active_stocks:
         st.markdown(card("📊 총 수익률", f"{total_profit_rate:+.2f}%", r_c), unsafe_allow_html=True)
 
     # -------------------------------
-    # 📋 10. 보유 종목 현황 테이블 (색상 적용)
+    # 📋 10. 보유 종목 현황 테이블 (수익률 색상 적용)
     # -------------------------------
     st.markdown("### 📋 보유 종목 현황")
-    
-    # 비중 계산 포함 데이터 생성
     table_rows = []
     for r in result_list:
         weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
         table_rows.append([r[0], r[1], r[2], r[3], r[4], r[5], round(weight, 1)])
     
-    # 예수금 행 추가
     cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
     table_rows.append(["💰 예수금 합계", None, None, None, int(cash), None, round(cash_weight, 1)])
 
     df_final = pd.DataFrame(table_rows, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
 
-    # 수익률 색상 스타일 함수
     def color_profit(val):
         if pd.isna(val) or isinstance(val, str): return ""
-        if val > 0: return "color: #e63946; font-weight: bold;" # 빨간색
-        if val < 0: return "color: #457b9d; font-weight: bold;" # 파란색
+        if val > 0: return "color: #e63946; font-weight: bold;"
+        if val < 0: return "color: #457b9d; font-weight: bold;"
         return ""
 
     st.dataframe(df_final.style.format({
