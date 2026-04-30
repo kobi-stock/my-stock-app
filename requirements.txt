@@ -1,5 +1,5 @@
-streamlit
 pandas
+streamlit
 requests
 beautifulsoup4
-openpyxl
+plotly

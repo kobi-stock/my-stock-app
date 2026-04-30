@@ -4,7 +4,12 @@ import requests
 from bs4 import BeautifulSoup
 import os
 import json
-import plotly.graph_objects as go
+
+# plotly 설치 여부 확인 및 예외 처리
+try:
+    import plotly.graph_objects as go
+except ImportError:
+    st.error("⚠️ 'plotly' 라이브러리가 설치되지 않았습니다. requirements.txt에 plotly를 추가해 주세요.")
 
 # -------------------------------
 # 💾 1. 데이터 저장 및 로드
@@ -45,17 +50,16 @@ TAB_INFO = {
     "한국투자증권": "1939408144"
 }
 
-@st.cache_data(ttl=10) # 10초마다 갱신
+@st.cache_data(ttl=10)
 def load_sheet_data(gid):
     try:
         url = f"{SHEET_BASE}&gid={gid}"
         df = pd.read_csv(url, dtype={'코드': str})
-        # 날짜 형식 변환
         if '날짜' in df.columns:
             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
         return df
     except Exception as e:
-        st.error(f"⚠️ 시트 로드 실패: {e}")
+        st.error(f"⚠️ 시트 로드 실패(gid:{gid}): {e}")
         return pd.DataFrame()
 
 # -------------------------------
@@ -71,24 +75,19 @@ if st.sidebar.button("🔄 저장된 수동 가격 초기화"):
     save_data(db)
     st.rerun()
 
-# 데이터 통합 로드
 if selected_account == "전체 계좌":
-    dfs = []
-    for gid in TAB_INFO.values():
-        temp = load_sheet_data(gid)
-        if not temp.empty: dfs.append(temp)
-    df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+    dfs = [load_sheet_data(gid) for gid in TAB_INFO.values()]
+    df = pd.concat(dfs, ignore_index=True) if any(not d.empty for d in dfs) else pd.DataFrame()
 else:
     df = load_sheet_data(TAB_INFO[selected_account])
 
 if df.empty:
-    st.warning("데이터가 없습니다. 구글 시트 공유 설정과 날짜 형식을 확인해 주세요.")
     st.stop()
 
 # -------------------------------
 # 🔹 5. 실시간 시세 크롤링
 # -------------------------------
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=15)
 def get_live_price(code):
     if not code or str(code) == "nan": return 0
     try:
@@ -143,69 +142,69 @@ if active_stocks:
                 save_data(db)
             price_dict[name] = p_input
 
-    # -------------------------------
-    # 💰 8. 요약 통계 및 테이블 (기존 동일)
-    # -------------------------------
-    saved_cash = db["cash"].get(selected_account if selected_account != "전체 계좌" else "기본 계좌", 1000000)
-    cash = saved_cash if selected_account == "전체 계좌" else st.number_input("💰 예수금 설정", value=int(saved_cash))
-    if selected_account != "전체 계좌" and cash != saved_cash:
-        db["cash"][selected_account] = cash
+    # 💰 예수금 처리
+    acc_key = selected_account if selected_account != "전체 계좌" else "기본 계좌"
+    saved_cash = db["cash"].get(acc_key, 1000000)
+    cash = st.number_input("💰 현재 예수금 설정", value=int(saved_cash), step=10000)
+    if cash != saved_cash:
+        db["cash"][acc_key] = cash
         save_data(db)
 
-    # ... 자산 계산 생략 ...
-    total_buy = sum([d["total_buy"] for d in portfolio.values()])
-    total_eval = sum([portfolio[name]["qty"] * price_dict[name] for name in active_stocks])
+    # 📈 요약 계산
+    result_list = []
+    total_eval, total_buy_sum = 0, 0
+    for name in active_stocks:
+        d = portfolio[name]
+        avg_p = d["total_buy"] / d["qty"]
+        curr_p = price_dict[name]
+        eval_amt = d["qty"] * curr_p
+        total_eval += eval_amt
+        total_buy_sum += d["total_buy"]
+        profit_r = (curr_p - avg_p) / avg_p * 100 if avg_p else 0
+        result_list.append([name, d["qty"], int(avg_p), curr_p, int(eval_amt), round(profit_r, 2)])
+
     total_asset = cash + total_eval
     
-    st.markdown(f"### 🏦 총 자산: {int(total_asset):,}원")
-
-    # -------------------------------
-    # 📅 9. 월별 통계 분석 (핵심 추가)
-    # -------------------------------
     st.markdown("---")
-    st.subheader("📅 월별 투자 성과")
+    st.subheader(f"🏦 총 자산: {int(total_asset):,}원")
 
+    # 📋 8. 보유 종목 현황 테이블
+    table_rows = []
+    for r in result_list:
+        weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
+        table_rows.append([r[0], r[1], r[2], r[3], r[4], r[5], round(weight, 1)])
+    
+    df_final = pd.DataFrame(table_rows, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+
+    def color_profit(val):
+        if pd.isna(val) or isinstance(val, str): return ""
+        return "color: #e63946; font-weight: bold;" if val > 0 else "color: #457b9d; font-weight: bold;" if val < 0 else ""
+
+    st.dataframe(df_final.style.format({
+        "수량": "{:,}", "평단": "{:,}", "현재가": "{:,}", "평가액": "{:,}", "수익률": "{:+.2f}%", "비중(%)": "{:.1f}%"
+    }).map(color_profit, subset=["수익률"]), use_container_width=True)
+
+    # 📅 9. 월별 통계 분석
     if '날짜' in df.columns and not df['날짜'].isnull().all():
+        st.markdown("---")
+        st.subheader("📅 월별 투자 성과 (매수 기준)")
         df['월'] = df['날짜'].dt.strftime('%Y-%m')
         
-        # 월별 매수/매도 합계 계산
-        monthly_data = []
-        months = sorted(df['월'].unique())
-        
-        cumulative_invested = 0
-        for m in months:
+        monthly_summary = []
+        for m in sorted(df['월'].unique()):
             m_df = df[df['월'] == m]
             m_buy = (m_df[m_df['구분'] == '매수']['수량'] * m_df[m_df['구분'] == '매수']['가격']).sum()
             m_sell = (m_df[m_df['구분'] == '매도']['수량'] * m_df[m_df['구분'] == '매도']['가격']).sum()
-            
-            # 월별 수익금액 (간이 계산: 매도 - 매수)
-            m_profit_amt = m_sell - m_buy
-            m_profit_rate = (m_profit_amt / m_buy * 100) if m_buy > 0 else 0
-            
-            monthly_data.append({
-                "월": m,
-                "매수금액": int(m_buy),
-                "매도금액": int(m_sell),
-                "수익률": round(m_profit_rate, 2),
-                "순투자액": int(m_buy - m_sell)
-            })
+            monthly_summary.append({"월": m, "매수금액": int(m_buy), "매도금액": int(m_sell), "순투자": int(m_buy - m_sell)})
 
-        mon_df = pd.DataFrame(monthly_data)
+        mon_df = pd.DataFrame(monthly_summary)
         
-        # 월별 수익률 차트
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=mon_df['월'], y=mon_df['수익률'], name='월별 수익률(%)',
-                             marker_color=['#e63946' if x > 0 else '#457b9d' for x in mon_df['수익률']]))
-        fig.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
-        st.plotly_chart(fig, use_container_width=True)
+        # 차트 출력
+        try:
+            fig = go.Figure(data=[go.Bar(x=mon_df['월'], y=mon_df['매수금액'], marker_color='#e63946')])
+            fig.update_layout(title="월별 매수 금액", height=300, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+        except:
+            st.bar_chart(mon_df.set_index('월')['매수금액'])
 
-        # 월별 요약 테이블
-        st.dataframe(mon_df.style.format({
-            "매수금액": "{:,}원",
-            "매도금액": "{:,}원",
-            "수익률": "{:+.2f}%",
-            "순투자액": "{:,}원"
-        }), use_container_width=True)
-
-    else:
-        st.info("월별 통계를 보려면 구글 시트에 '날짜' 데이터를 입력해 주세요.")
+        st.table(mon_df.style.format("{:,}원", subset=["매수금액", "매도금액", "순투자"]))
