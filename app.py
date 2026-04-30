@@ -37,7 +37,6 @@ div.stNumberInput > label { font-weight: bold; }
 # -------------------------------
 # 📂 3. 구글 시트 정보 설정
 # -------------------------------
-# 시트 주소 (포맷 유지)
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {
     "기본 계좌": "0",
@@ -48,7 +47,6 @@ TAB_INFO = {
 def load_sheet_data(gid):
     try:
         url = f"{SHEET_BASE}&gid={gid}"
-        # CSV를 읽을 때 모든 데이터를 일단 문자열로 읽어 전처리를 유연하게 함
         df = pd.read_csv(url, dtype=str)
         return df
     except Exception as e:
@@ -63,11 +61,6 @@ selected_account = st.sidebar.selectbox("표시할 계좌를 선택하세요", [
 
 db = load_data()
 
-if st.sidebar.button("🔄 저장된 수동 가격 초기화"):
-    db["manual_prices"] = {}
-    save_data(db)
-    st.rerun()
-
 if selected_account == "전체 계좌":
     dfs = [load_sheet_data(gid) for gid in TAB_INFO.values()]
     df = pd.concat(dfs, ignore_index=True) if any(not d.empty for d in dfs) else pd.DataFrame()
@@ -75,7 +68,7 @@ else:
     df = load_sheet_data(TAB_INFO[selected_account])
 
 if df.empty:
-    st.warning("데이터가 없습니다. 구글 시트의 공유 설정과 데이터를 확인해 주세요.")
+    st.warning("데이터가 없습니다. 구글 시트를 확인해 주세요.")
     st.stop()
 
 st.title(f"📊 {selected_account} 포트폴리오")
@@ -107,15 +100,11 @@ def get_live_price(code):
     except: return 0
 
 # -------------------------------
-# 📊 7. 포트폴리오 계산 logic (순서 기반 핵심 수정)
+# 📊 7. 포트폴리오 계산 logic
 # -------------------------------
 portfolio = {}
-
 try:
-    # 이미지 image_2802c1.png 기준 열 순환 (날짜, 종목, 수량, 가격, 구분, 코드)
-    # iloc을 사용하여 열 이름 오타 방지
     for _, row in df.iterrows():
-        # 데이터 정제 (공백 제거 및 숫자 변환)
         name = str(row.iloc[1]).strip() if pd.notnull(row.iloc[1]) else ""
         if not name or name == "nan": continue
         
@@ -135,8 +124,6 @@ try:
                 avg_p = portfolio[name]["total_buy"] / portfolio[name]["qty"]
                 portfolio[name]["qty"] -= qty
                 portfolio[name]["total_buy"] -= avg_p * qty
-                if portfolio[name]["qty"] <= 0:
-                    portfolio[name]["total_buy"] = 0
 except Exception as e:
     st.error(f"데이터 계산 중 오류 발생: {e}")
 
@@ -146,6 +133,9 @@ active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 # 💹 8. 현재가 입력 및 요약 집계
 # -------------------------------
 price_dict = {}
+total_eval, total_buy_sum = 0, 0
+result_list = []
+
 if active_stocks:
     st.markdown("### 💹 실시간 시세 (수동 입력 시 저장)")
     cols = st.columns(4)
@@ -162,9 +152,6 @@ if active_stocks:
                 save_data(db)
             price_dict[name] = p_input
 
-    # 요약 계산
-    result_list = []
-    total_eval, total_buy_sum = 0, 0
     for name in active_stocks:
         d = portfolio[name]
         avg_p = d["total_buy"] / d["qty"]
@@ -175,49 +162,55 @@ if active_stocks:
         profit_r = (curr_p - avg_p) / avg_p * 100 if avg_p else 0
         result_list.append([name, d["qty"], int(avg_p), curr_p, int(eval_amt), round(profit_r, 2)])
 
-    total_asset = cash + total_eval
-    total_profit_amt = total_eval - total_buy_sum
-    total_profit_rate = (total_profit_amt / total_buy_sum * 100) if total_buy_sum > 0 else 0
+total_asset = cash + total_eval
+total_profit_amt = total_eval - total_buy_sum
+total_profit_rate = (total_profit_amt / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
-    # -------------------------------
-    # 🏦 9. 결과 카드 및 테이블 출력
-    # -------------------------------
-    def card(title, value, color="black"):
-        return f"""<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;">
-        <div style="font-size:12px; color:gray;">{title}</div>
-        <div style="font-size:18px; font-weight:bold; color:{color};">{value}</div></div>"""
+# -------------------------------
+# 🏦 9. 결과 카드 및 테이블 출력 (예수금 추가 수정)
+# -------------------------------
+def card(title, value, color="black"):
+    return f"""<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;">
+    <div style="font-size:12px; color:gray;">{title}</div>
+    <div style="font-size:18px; font-weight:bold; color:{color};">{value}</div></div>"""
 
-    st.markdown("---")
-    st.markdown("### 📊 계좌 요약")
-    c1, c2, c3 = st.columns(3)
-    with c1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
-    with c2: st.markdown(card("📥 총 매수액", f"{int(total_buy_sum):,}원"), unsafe_allow_html=True)
-    with c3: 
-        a_c = "#e63946" if total_profit_amt > 0 else "#457b9d" if total_profit_amt < 0 else "black"
-        st.markdown(card("💵 총 수익", f"{int(total_profit_amt):+,}원", a_c), unsafe_allow_html=True)
+st.markdown("---")
+st.markdown("### 📊 계좌 요약")
+c1, c2, c3 = st.columns(3)
+with c1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
+with c2: st.markdown(card("📥 총 매수액", f"{int(total_buy_sum):,}원"), unsafe_allow_html=True)
+with c3: 
+    a_c = "#e63946" if total_profit_amt > 0 else "#457b9d" if total_profit_amt < 0 else "black"
+    st.markdown(card("💵 총 수익", f"{int(total_profit_amt):+,}원", a_c), unsafe_allow_html=True)
 
-    c4, c5, c6 = st.columns(3)
-    with c4: st.markdown(card("📈 총 평가액", f"{int(total_eval):,}원"), unsafe_allow_html=True)
-    with c5: st.markdown(card("🏦 총 자산", f"{int(total_asset):,}원"), unsafe_allow_html=True)
-    with c6: 
-        r_c = "#e63946" if total_profit_rate > 0 else "#457b9d" if total_profit_rate < 0 else "black"
-        st.markdown(card("📊 총 수익률", f"{total_profit_rate:+.2f}%", r_c), unsafe_allow_html=True)
+c4, c5, c6 = st.columns(3)
+with c4: st.markdown(card("📈 총 평가액", f"{int(total_eval):,}원"), unsafe_allow_html=True)
+with c5: st.markdown(card("🏦 총 자산", f"{int(total_asset):,}원"), unsafe_allow_html=True)
+with c6: 
+    r_c = "#e63946" if total_profit_rate > 0 else "#457b9d" if total_profit_rate < 0 else "black"
+    st.markdown(card("📊 총 수익률", f"{total_profit_rate:+.2f}%", r_c), unsafe_allow_html=True)
 
-    st.markdown("### 📋 보유 종목 현황")
-    final_data = []
-    for r in result_list:
-        weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
-        final_data.append([r[0], r[1], r[2], r[3], r[4], r[5], round(weight, 1)])
-    
-    df_final = pd.DataFrame(final_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+st.markdown("### 📋 보유 종목 현황")
+final_data = []
+for r in result_list:
+    weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
+    final_data.append([r[0], r[1], r[2], r[3], r[4], r[5], round(weight, 1)])
 
-    def color_p(val):
-        if pd.isna(val) or isinstance(val, str): return ''
-        return f'color: {"#e63946" if val > 0 else "#457b9d" if val < 0 else "black"}; font-weight: bold;'
+# 최하단에 예수금 행 추가[cite: 1]
+cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
+final_data.append(["💰 예수금", None, None, None, int(cash), None, round(cash_weight, 1)])
 
-    st.dataframe(df_final.style.format({
-        "수량": "{:,.0f}", "평단": "{:,.0f}", "현재가": "{:,.0f}", "평가액": "{:,.0f}", "수익률": "{:+.2f}%", "비중(%)": "{:.1f}%"
-    }).map(color_p, subset=['수익률']), use_container_width=True)
+df_final = pd.DataFrame(final_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
 
-else:
-    st.info("보유 중인 종목이 없습니다. 구글 시트에서 '매수' 데이터를 확인해 주세요.")
+def color_p(val):
+    if pd.isna(val) or isinstance(val, str): return ''
+    return f'color: {"#e63946" if val > 0 else "#457b9d" if val < 0 else "black"}; font-weight: bold;'
+
+st.dataframe(df_final.style.format({
+    "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "평가액": "{:,.0f}",
+    "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-",
+    "비중(%)": "{:.1f}%"
+}).map(color_p, subset=['수익률']), use_container_width=True)
