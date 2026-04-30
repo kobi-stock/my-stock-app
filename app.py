@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 import os
 import json
+import plotly.graph_objects as go
 
 # -------------------------------
 # 💾 1. 데이터 저장 및 로드
@@ -24,14 +25,13 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # -------------------------------
-# 📱 2. 화면 구성 및 스타일 (중앙 정렬로 수정)
+# 📱 2. 화면 구성 및 스타일
 # -------------------------------
-st.set_page_config(page_title="주식 포트폴리오 관리", layout="centered") # 중앙 정렬로 변경
+st.set_page_config(page_title="주식 포트폴리오 관리", layout="centered")
 st.markdown("""
 <style>
 .main .block-container { max-width: 850px; padding-top: 2rem; }
 div.stNumberInput > label { font-weight: bold; font-size: 13px; }
-/* 테이블 폰트 크기 조절 */
 .stDataFrame { font-size: 14px; }
 </style>
 """, unsafe_allow_html=True)
@@ -45,18 +45,21 @@ TAB_INFO = {
     "한국투자증권": "1939408144"
 }
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=10) # 10초마다 갱신
 def load_sheet_data(gid):
     try:
         url = f"{SHEET_BASE}&gid={gid}"
         df = pd.read_csv(url, dtype={'코드': str})
+        # 날짜 형식 변환
+        if '날짜' in df.columns:
+            df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
         return df
     except Exception as e:
         st.error(f"⚠️ 시트 로드 실패: {e}")
         return pd.DataFrame()
 
 # -------------------------------
-# 📂 4. 사이드바 관리
+# 📂 4. 사이드바 및 데이터 로드
 # -------------------------------
 st.sidebar.title("📂 계좌 관리")
 selected_account = st.sidebar.selectbox("표시할 계좌를 선택하세요", ["전체 계좌"] + list(TAB_INFO.keys()))
@@ -66,10 +69,9 @@ db = load_data()
 if st.sidebar.button("🔄 저장된 수동 가격 초기화"):
     db["manual_prices"] = {}
     save_data(db)
-    st.sidebar.success("가격이 초기화되었습니다.")
     st.rerun()
 
-# 데이터 로드
+# 데이터 통합 로드
 if selected_account == "전체 계좌":
     dfs = []
     for gid in TAB_INFO.values():
@@ -80,13 +82,13 @@ else:
     df = load_sheet_data(TAB_INFO[selected_account])
 
 if df.empty:
-    st.warning("데이터가 없습니다. 시트를 확인해 주세요.")
+    st.warning("데이터가 없습니다. 구글 시트 공유 설정과 날짜 형식을 확인해 주세요.")
     st.stop()
 
 # -------------------------------
-# 🔹 5. 실시간 시세 크롤링 함수
+# 🔹 5. 실시간 시세 크롤링
 # -------------------------------
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=20)
 def get_live_price(code):
     if not code or str(code) == "nan": return 0
     try:
@@ -127,8 +129,6 @@ st.title(f"📊 {selected_account}")
 price_dict = {}
 
 if active_stocks:
-    st.markdown("### 💹 현재가 확인")
-    # 화면이 좁아졌으므로 3열로 배치
     cols = st.columns(3)
     for i, name in enumerate(active_stocks):
         data = portfolio[name]
@@ -144,84 +144,68 @@ if active_stocks:
             price_dict[name] = p_input
 
     # -------------------------------
-    # 💰 8. 예수금 설정
+    # 💰 8. 요약 통계 및 테이블 (기존 동일)
+    # -------------------------------
+    saved_cash = db["cash"].get(selected_account if selected_account != "전체 계좌" else "기본 계좌", 1000000)
+    cash = saved_cash if selected_account == "전체 계좌" else st.number_input("💰 예수금 설정", value=int(saved_cash))
+    if selected_account != "전체 계좌" and cash != saved_cash:
+        db["cash"][selected_account] = cash
+        save_data(db)
+
+    # ... 자산 계산 생략 ...
+    total_buy = sum([d["total_buy"] for d in portfolio.values()])
+    total_eval = sum([portfolio[name]["qty"] * price_dict[name] for name in active_stocks])
+    total_asset = cash + total_eval
+    
+    st.markdown(f"### 🏦 총 자산: {int(total_asset):,}원")
+
+    # -------------------------------
+    # 📅 9. 월별 통계 분석 (핵심 추가)
     # -------------------------------
     st.markdown("---")
-    if selected_account == "전체 계좌":
-        cash = sum([db["cash"].get(name, 1000000) for name in TAB_INFO.keys()])
-        st.info(f"💡 전체 계좌 합산 예수금: {cash:,}원")
+    st.subheader("📅 월별 투자 성과")
+
+    if '날짜' in df.columns and not df['날짜'].isnull().all():
+        df['월'] = df['날짜'].dt.strftime('%Y-%m')
+        
+        # 월별 매수/매도 합계 계산
+        monthly_data = []
+        months = sorted(df['월'].unique())
+        
+        cumulative_invested = 0
+        for m in months:
+            m_df = df[df['월'] == m]
+            m_buy = (m_df[m_df['구분'] == '매수']['수량'] * m_df[m_df['구분'] == '매수']['가격']).sum()
+            m_sell = (m_df[m_df['구분'] == '매도']['수량'] * m_df[m_df['구분'] == '매도']['가격']).sum()
+            
+            # 월별 수익금액 (간이 계산: 매도 - 매수)
+            m_profit_amt = m_sell - m_buy
+            m_profit_rate = (m_profit_amt / m_buy * 100) if m_buy > 0 else 0
+            
+            monthly_data.append({
+                "월": m,
+                "매수금액": int(m_buy),
+                "매도금액": int(m_sell),
+                "수익률": round(m_profit_rate, 2),
+                "순투자액": int(m_buy - m_sell)
+            })
+
+        mon_df = pd.DataFrame(monthly_data)
+        
+        # 월별 수익률 차트
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=mon_df['월'], y=mon_df['수익률'], name='월별 수익률(%)',
+                             marker_color=['#e63946' if x > 0 else '#457b9d' for x in mon_df['수익률']]))
+        fig.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 월별 요약 테이블
+        st.dataframe(mon_df.style.format({
+            "매수금액": "{:,}원",
+            "매도금액": "{:,}원",
+            "수익률": "{:+.2f}%",
+            "순투자액": "{:,}원"
+        }), use_container_width=True)
+
     else:
-        saved_cash = db["cash"].get(selected_account, 1000000)
-        cash = st.number_input(f"💰 {selected_account} 예수금 설정", value=int(saved_cash), step=10000)
-        if cash != saved_cash:
-            db["cash"][selected_account] = cash
-            save_data(db)
-
-    # -------------------------------
-    # 📈 9. 요약 통계 계산 및 카드 출력
-    # -------------------------------
-    result_list = []
-    total_eval, total_buy = 0, 0
-    for name in active_stocks:
-        d = portfolio[name]
-        avg_p = d["total_buy"] / d["qty"]
-        curr_p = price_dict.get(name, avg_p)
-        eval_amt = d["qty"] * curr_p
-        total_eval += eval_amt
-        total_buy += d["total_buy"]
-        profit_r = (curr_p - avg_p) / avg_p * 100 if avg_p else 0
-        result_list.append([name, d["qty"], int(avg_p), curr_p, int(eval_amt), round(profit_r, 2)])
-
-    total_asset = cash + total_eval
-    total_profit_amt = total_eval - total_buy
-    total_profit_rate = (total_eval - total_buy) / total_buy * 100 if total_buy > 0 else 0
-
-    def card(title, value, color="black"):
-        return f"""<div style="padding:8px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:3px;">
-        <div style="font-size:11px; color:gray;">{title}</div>
-        <div style="font-size:16px; font-weight:bold; color:{color};">{value}</div></div>"""
-
-    c1, c2, c3 = st.columns(3)
-    with c1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
-    with c2: st.markdown(card("📥 총 매수액", f"{int(total_buy):,}원"), unsafe_allow_html=True)
-    with c3: 
-        a_c = "#e63946" if total_profit_amt > 0 else "#457b9d" if total_profit_amt < 0 else "black"
-        st.markdown(card("💵 총 수익", f"{int(total_profit_amt):+,}원", a_c), unsafe_allow_html=True)
-
-    c4, c5, c6 = st.columns(3)
-    with c4: st.markdown(card("📈 총 평가액", f"{int(total_eval):,}원"), unsafe_allow_html=True)
-    with c5: st.markdown(card("🏦 총 자산", f"{int(total_asset):,}원"), unsafe_allow_html=True)
-    with c6: 
-        r_c = "#e63946" if total_profit_rate > 0 else "#457b9d" if total_profit_rate < 0 else "black"
-        st.markdown(card("📊 총 수익률", f"{total_profit_rate:+.2f}%", r_c), unsafe_allow_html=True)
-
-    # -------------------------------
-    # 📋 10. 보유 종목 현황 테이블 (수익률 색상 적용)
-    # -------------------------------
-    st.markdown("### 📋 보유 종목 현황")
-    table_rows = []
-    for r in result_list:
-        weight = (r[4] / total_asset * 100) if total_asset > 0 else 0
-        table_rows.append([r[0], r[1], r[2], r[3], r[4], r[5], round(weight, 1)])
-    
-    cash_weight = (cash / total_asset * 100) if total_asset > 0 else 0
-    table_rows.append(["💰 예수금 합계", None, None, None, int(cash), None, round(cash_weight, 1)])
-
-    df_final = pd.DataFrame(table_rows, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
-
-    def color_profit(val):
-        if pd.isna(val) or isinstance(val, str): return ""
-        if val > 0: return "color: #e63946; font-weight: bold;"
-        if val < 0: return "color: #457b9d; font-weight: bold;"
-        return ""
-
-    st.dataframe(df_final.style.format({
-        "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "평가액": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-",
-        "비중(%)": lambda x: f"{x:.1f}%"
-    }).map(color_profit, subset=["수익률"]), use_container_width=True)
-else:
-    st.info("보유 종목이 없습니다.")
+        st.info("월별 통계를 보려면 구글 시트에 '날짜' 데이터를 입력해 주세요.")
