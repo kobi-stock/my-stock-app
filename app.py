@@ -106,24 +106,34 @@ else:
 
 if df.empty: st.warning("데이터 로딩 중..."); st.stop()
 
-# 💹 5. 시세 엔진
+# 💹 5. 시세 엔진 (보강됨)
 token = get_kis_token(ak, as_) if ak and as_ else None
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=2) # 캐시 시간을 2초로 줄여 더 자주 갱신되게 함
 def fetch_live_price(code):
     if not code or pd.isna(code): return 0
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
+    
+    # 1순위: 한국투자증권 API (가장 정확함)
     if token:
         p = get_kis_price(clean_code, ak, as_, token)
-        if p: return p
+        if p and p > 0: return p
+    
+    # 2순위: 네이버 금융 실시간 페이지 (API 실패 시 대안)
     try:
-        url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
-        h = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(url, headers=h, timeout=2)
-        soup = BeautifulSoup(r.text, "html.parser")
-        return int(soup.select_one(".no_today .blind").text.replace(",", ""))
-    except: return 0
-
+        # 실시간성이 더 높은 다른 경로 시도
+        url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{clean_code}"
+        r = requests.get(url, timeout=2)
+        data = r.json()
+        return int(data['result']['areas'][0]['datas'][0]['nv'])
+    except:
+        try:
+            url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
+            h = {'User-Agent': 'Mozilla/5.0'}
+            r = requests.get(url, headers=h, timeout=2)
+            soup = BeautifulSoup(r.text, "html.parser")
+            return int(soup.select_one(".no_today .blind").text.replace(",", ""))
+        except: return 0
 # 📊 6. 포트폴리오 계산
 portfolio = {}
 for _, row in df.iterrows():
