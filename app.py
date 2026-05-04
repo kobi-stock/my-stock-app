@@ -17,8 +17,7 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                keys = ["cash", "manual_prices", "api_keys", "history"]
-                for key in keys:
+                for key in ["cash", "manual_prices", "api_keys", "history"]:
                     if key not in data: data[key] = {}
                 return data
         except:
@@ -105,7 +104,7 @@ else:
 
 if df.empty: st.warning("데이터 로딩 중..."); st.stop()
 
-# 💹 5. 시세 엔진 (보강됨)
+# 💹 5. 시세 엔진 (가장 정확한 경로 위주)
 token = get_kis_token(ak, as_) if ak and as_ else None
 
 @st.cache_data(ttl=5)
@@ -116,16 +115,12 @@ def fetch_live_price(code):
         p = get_kis_price(clean_code, ak, as_, token)
         if p and p > 0: return p
     try:
+        # 네이버 실시간 API (가장 빠름)
         url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{clean_code}"
-        data = requests.get(url, timeout=2).json()
-        return int(data['result']['areas'][0]['datas'][0]['nv'])
+        res = requests.get(url, timeout=2).json()
+        return int(res['result']['areas'][0]['datas'][0]['nv'])
     except:
-        try:
-            url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
-            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=2)
-            soup = BeautifulSoup(r.text, "html.parser")
-            return int(soup.select_one(".no_today .blind").text.replace(",", ""))
-        except: return 0
+        return 0
 
 # 📊 6. 포트폴리오 계산
 portfolio = {}
@@ -172,7 +167,7 @@ if active_stocks:
 
     total_asset = cash + total_eval
     
-    # 히스토리 및 변동률
+    # 히스토리 기록
     today_str = datetime.date.today().isoformat()
     if st.session_state.db.get("history") is None: st.session_state.db["history"] = {}
     st.session_state.db["history"][today_str] = total_asset
@@ -189,9 +184,10 @@ if active_stocks:
     st.divider()
     st.markdown("#### 📈 기간별 자산 변동")
     m1, m2, m3 = st.columns(3)
-    for col, days, label in zip([m1, m2, m3], [1, 7, 30], ["전일", "전주", "전월"]):
-        rate, val = get_history_change(days)
-        col.metric(f"{label} 대비", f"{int(val):+,}원", f"{rate:+.2f}%")
+    d_rate, d_val = get_history_change(1); w_rate, w_val = get_history_change(7); m_rate, m_val = get_history_change(30)
+    m1.metric("전일 대비", f"{int(d_val):+,}원", f"{d_rate:+.2f}%")
+    m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
+    m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
 
     st.divider()
     total_profit = total_eval - total_buy_sum
@@ -204,7 +200,7 @@ if active_stocks:
     c5.metric("🏦 총자산", f"{int(total_asset):,}원")
     c6.metric("📊 수익률", f"{total_rate:+.2f}%")
 
-    # 📋 8. 보유 종목 현황 (데이터 타입 에러 수정)
+    # 📋 8. 보유 종목 현황 (오류 해결 버전)
     st.divider()
     st.markdown("#### 📋 보유 종목 현황")
     res_list = []
@@ -216,7 +212,7 @@ if active_stocks:
             "현재가": float(curr_p), "평가액": float(eval_amt), 
             "수익률": float((curr_p-avg_p)/avg_p*100), "비중(%)": float(eval_amt/total_asset*100)
         })
-    # 예수금 추가 (데이터 타입 일치를 위해 숫자 0 사용)
+    # 예수금을 마지막 줄에 추가
     res_list.append({
         "종목": "💰 예수금", "수량": 0.0, "평단": 0.0, "현재가": 0.0, 
         "평가액": float(cash), "수익률": 0.0, "비중(%)": float(cash/total_asset*100)
@@ -224,7 +220,6 @@ if active_stocks:
     
     df_final = pd.DataFrame(res_list)
 
-    # 스타일 및 포맷 (0.0은 '-'로 표시되게 처리)
     st.dataframe(
         df_final.style.format({
             "수량": lambda x: f"{int(x):,}" if x > 0 else "-",
