@@ -41,14 +41,48 @@ def get_live_price(code):
     except:
         return 0
 
-# 📱 3. 화면 설정 및 스타일
+# 📱 3. 화면 설정 및 모바일 최적화 스타일 (가로 배열 강제 적용)
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
+
 st.markdown("""
 <style>
-    h1 { font-size: 1.6rem !important; }
-    [data-testid='stMetricValue'] { font-size: 1.0rem !important; }
-    [data-testid='stMetricLabel'] { font-size: 0.8rem !important; }
-    h3 { font-size: 1.2rem !important; }
+    /* 전체 제목 및 텍스트 크기 조절 */
+    h1 { font-size: 1.5rem !important; margin-bottom: 0.5rem !important; }
+    h3 { font-size: 1.1rem !important; margin-top: 1rem !important; }
+    
+    /* 카드 컨테이너: 모바일에서도 가로로 배치되도록 설정 */
+    .card-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-start;
+        margin-bottom: 10px;
+    }
+    
+    /* 개별 카드 스타일 (배경색, 테두리, 그림자 추가) */
+    .custom-card {
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        padding: 8px 10px;
+        min-width: 100px;
+        flex: 1 1 calc(33.333% - 8px); /* 한 줄에 3개 배치 시도 */
+        box-shadow: 1px 1px 3px rgba(0,0,0,0.05);
+        text-align: center;
+    }
+    
+    /* 모바일 화면에서는 2개씩 보이도록 조정 */
+    @media (max-width: 480px) {
+        .custom-card {
+            flex: 1 1 calc(50% - 8px); /* 한 줄에 2개 배치 */
+        }
+    }
+    
+    .card-label { font-size: 0.75rem; color: #6c757d; margin-bottom: 2px; }
+    .card-value { font-size: 0.95rem; font-weight: 700; color: #212529; }
+    .card-delta { font-size: 0.75rem; font-weight: 500; }
+    .up { color: #e63946; }
+    .down { color: #457b9d; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,7 +106,7 @@ else:
     df = load_sheet_data(TAB_INFO[selected_account])
     total_cash = int(db["cash"].get(selected_account, 0))
 
-# 포트폴리오 계산
+# 포트폴리오 계산 로직
 portfolio = {}
 if not df.empty:
     for _, row in df.iterrows():
@@ -94,31 +128,36 @@ if not df.empty:
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # =========================================================
-# 1️⃣ 예수금 입력
+# 1️⃣ 예수금 입력 (상단)
 # =========================================================
-st.title(f"📊 {selected_account} 현황")
+st.title(f"📊 {selected_account}")
 if selected_account != "전체 계좌":
     new_cash = st.number_input(f"💰 예수금 입력", value=total_cash, step=10000)
     if new_cash != total_cash:
         db["cash"][selected_account] = new_cash
         save_data(db)
         st.rerun()
-else:
-    st.info(f"💡 전체 합산 예수금: {total_cash:,}원")
 
 # =========================================================
-# 2️⃣ 실시간 종목 시세
+# 2️⃣ 실시간 종목 시세 (가로 카드 레이아웃 적용)
 # =========================================================
 price_dict = {}
 if active_stocks:
     st.subheader("💹 실시간 종목 시세")
-    cols = st.columns(4)
-    for i, name in enumerate(active_stocks):
+    stock_html = '<div class="card-container">'
+    for name in active_stocks:
         live_p = get_live_price(portfolio[name]["code"])
         price_dict[name] = live_p
-        with cols[i % 4]:
-            st.metric(label=name, value=f"{live_p:,}")
+        stock_html += f"""
+        <div class="custom-card">
+            <div class="card-label">{name}</div>
+            <div class="card-value">{live_p:,}</div>
+        </div>
+        """
+    stock_html += '</div>'
+    st.markdown(stock_html, unsafe_allow_html=True)
 
+    # 데이터 요약 계산
     total_eval, total_buy_sum, result_list = 0, 0, []
     for name in active_stocks:
         d = portfolio[name]
@@ -136,7 +175,7 @@ if active_stocks:
     save_data(db)
 
     # =========================================================
-    # 3️⃣ 계좌 변동 현황
+    # 3️⃣ 계좌 변동 및 주요 지표 (가로 카드 레이아웃 적용)
     # =========================================================
     def get_change(days):
         target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
@@ -146,32 +185,53 @@ if active_stocks:
         return (total_asset - past_val) / past_val * 100, total_asset - past_val
 
     st.divider()
-    st.subheader("📈 계좌 변동 현황")
-    m1, m2, m3 = st.columns(3)
+    st.subheader("📈 계좌 변동 및 요약")
+    
     d_rate, d_val = get_change(1); w_rate, w_val = get_change(7); m_rate, m_val = get_change(30)
-    m1.metric("전일 대비", f"{int(d_val):+,}", f"{d_rate:+.2f}%")
-    m2.metric("전주 대비", f"{int(w_val):+,}", f"{w_rate:+.2f}%")
-    m3.metric("전월 대비", f"{int(m_val):+,}", f"{m_rate:+.2f}%")
-
     t_profit_amt = total_eval - total_buy_sum
     t_profit_rate = (t_profit_amt / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("💰 예수금", f"{int(total_cash):,}")
-    c2.metric("📥 총매수액", f"{int(total_buy_sum):,}")
-    c3.metric("💵 총수익", f"{int(t_profit_amt):+,}", f"{t_profit_rate:+.2f}%")
-
-    c4, c5, c6 = st.columns(3)
-    c4.metric("📈 총평가액", f"{int(total_eval):,}")
-    c5.metric("🏦 총자산", f"{int(total_asset):,}")
-    c6.metric("📊 총수익률", f"{t_profit_rate:+.2f}%")
+    # 주요 지표를 카드 형태로 구성 (모바일 가로 배열 강제)
+    metrics_html = '<div class="card-container">'
+    
+    # 1. 변동현황 3개
+    for label, val, rate in [("전일대비", d_val, d_rate), ("전주대비", w_val, w_rate), ("전월대비", m_val, m_rate)]:
+        cls = "up" if val >= 0 else "down"
+        metrics_html += f"""
+        <div class="custom-card">
+            <div class="card-label">{label}</div>
+            <div class="card-value">{int(val):+,}</div>
+            <div class="card-delta {cls}">{rate:+.2f}%</div>
+        </div>
+        """
+    
+    # 2. 계좌 요약 4개
+    summary_items = [
+        ("💰 예수금", total_cash), ("📥 총매수액", total_buy_sum),
+        ("🏦 총자산", total_asset), ("📊 총수익률", t_profit_rate)
+    ]
+    for label, val in summary_items:
+        if "수익률" in label:
+            cls = "up" if val >= 0 else "down"
+            display_val = f"{val:+.2f}%"
+        else:
+            cls = ""
+            display_val = f"{int(val):,}"
+        
+        metrics_html += f"""
+        <div class="custom-card">
+            <div class="card-label">{label}</div>
+            <div class="card-value {cls}">{display_val}</div>
+        </div>
+        """
+    metrics_html += '</div>'
+    st.markdown(metrics_html, unsafe_allow_html=True)
 
     # =========================================================
-    # 4️⃣ 보유 종목 현황
+    # 4️⃣ 보유 종목 현황 표
     # =========================================================
     st.divider()
-    st.subheader("📋 보유 종목 현황")
-    
+    st.subheader("📋 보유 종목 리스트")
     final_data = [[r[0], r[1], r[2], r[3], r[4], r[5], round(r[4]/total_asset*100, 1)] for r in result_list]
     cash_row = ["💰 예수금", None, None, None, int(total_cash), None, round(total_cash/total_asset*100, 1)]
     final_data.append(cash_row)
