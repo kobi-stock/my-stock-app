@@ -26,8 +26,7 @@ def save_data(data):
 if 'db' not in st.session_state:
     st.session_state.db = load_data()
 
-# 💹 2. 시세 엔진 (5분 캐시)
-@st.cache_data(ttl=300)
+# 💹 2. 시세 엔진 (무조건 숫자를 반환하도록 강화)
 def fetch_live_price(code):
     if not code or pd.isna(code): return 0
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
@@ -37,49 +36,36 @@ def fetch_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📱 3. UI 설정 및 스타일 (색상 적용)
-st.set_page_config(page_title="주식 포트폴리오", layout="centered")
-st.markdown("""
-    <style>
-    [data-testid='stMetricValue'] { font-size: 1.4rem !important; }
-    .red-text { color: #e63946; font-weight: bold; }
-    .blue-text { color: #457b9d; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
+# 📱 3. UI 설정
+st.set_page_config(page_title="주식 포트폴리오", layout="wide") # 넓게 보기
 
-# 🛠️ 4. 사이드바 (API 입력창 및 계좌 설정)
-st.sidebar.title("🛠️ 설정 및 API")
-
-# 한투 API 입력창 복구
-with st.sidebar.expander("🔐 API 정보 설정 (한투)", expanded=False):
+# 🛠️ 4. 사이드바 (API 및 예수금)
+st.sidebar.title("🛠️ 설정")
+with st.sidebar.expander("🔐 한투 API 설정"):
     ak = st.text_input("App Key", value=st.session_state.db["api_keys"].get("key", ""), type="password")
     as_ = st.text_input("App Secret", value=st.session_state.db["api_keys"].get("secret", ""), type="password")
-    if st.button("API 정보 저장"):
+    if st.button("저장"):
         st.session_state.db["api_keys"] = {"key": ak, "secret": as_}
         save_data(st.session_state.db)
-        st.success("저장되었습니다!")
-
-st.sidebar.divider()
 
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def load_sheet_data(gid):
     url = f"https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv&gid={gid}"
     try: return pd.read_csv(url, dtype=str)
     except: return pd.DataFrame()
 
-# 예수금 및 데이터 로드
+# 데이터 및 예수금 로드
 if selected_account == "전체 계좌":
     dfs = [load_sheet_data(gid) for gid in TAB_INFO.values()]
     df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
     cash = sum(int(st.session_state.db["cash"].get(name, 0)) for name in TAB_INFO.keys())
-    st.sidebar.info(f"합산 예수금: {cash:,}원")
 else:
     df = load_sheet_data(TAB_INFO[selected_account])
     saved_cash = int(st.session_state.db["cash"].get(selected_account, 0))
-    cash = st.sidebar.number_input(f"💰 {selected_account} 예수금 입력", value=saved_cash, step=10000)
+    cash = st.sidebar.number_input(f"💰 {selected_account} 예수금", value=saved_cash, step=10000)
     if cash != saved_cash:
         st.session_state.db["cash"][selected_account] = cash
         save_data(st.session_state.db)
@@ -88,41 +74,36 @@ else:
 portfolio = {}
 if not df.empty:
     for _, row in df.iterrows():
-        name = str(row.iloc[1]).strip()
-        if not name or name == "nan": continue
-        qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
-        price = pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
-        action = str(row.iloc[4]).strip()
-        code = str(row.iloc[5])
-        if name not in portfolio: portfolio[name] = {"qty": 0, "total_buy": 0, "code": code}
-        if action == "매수":
-            portfolio[name]["qty"] += qty
-            portfolio[name]["total_buy"] += qty * price
-        elif action == "매도":
-            avg_p = portfolio[name]["total_buy"] / portfolio[name]["qty"] if portfolio[name]["qty"] > 0 else 0
-            portfolio[name]["qty"] -= qty
-            portfolio[name]["total_buy"] -= avg_p * qty
+        try:
+            name = str(row.iloc[1]).strip()
+            if not name or name == "nan" or name == "종목": continue
+            qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
+            price = pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
+            action = str(row.iloc[4]).strip()
+            code = str(row.iloc[5])
+            
+            if name not in portfolio: portfolio[name] = {"qty": 0, "total_buy": 0, "code": code}
+            if "매수" in action:
+                portfolio[name]["qty"] += qty
+                portfolio[name]["total_buy"] += qty * price
+            elif "매도" in action:
+                avg_p = portfolio[name]["total_buy"] / portfolio[name]["qty"] if portfolio[name]["qty"] > 0 else 0
+                portfolio[name]["qty"] -= qty
+                portfolio[name]["total_buy"] -= avg_p * qty
+        except: continue
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # 🏦 6. 메인 화면
-st.title(f"📊 {selected_account} 현황")
+st.title(f"📊 {selected_account} 자산 현황")
 
 price_dict = {}
 if active_stocks:
-    # 시세 수정 확장칸
-    with st.expander("💹 시세 수동 수정 (가격 박제 시 이용)", expanded=False):
-        cols = st.columns(3)
-        for i, name in enumerate(active_stocks):
-            live_p = fetch_live_price(portfolio[name]["code"])
-            saved_p = st.session_state.db["manual_prices"].get(name)
-            display_val = saved_p if saved_p is not None else live_p
-            with cols[i % 3]:
-                p_in = st.number_input(f"{name}", value=int(display_val), key=f"p_{name}")
-                if p_in != display_val:
-                    st.session_state.db["manual_prices"][name] = p_in
-                    save_data(st.session_state.db)
-                price_dict[name] = p_in
+    # 3개씩 두 줄 레이아웃 계산용
+    for name in active_stocks:
+        live_p = fetch_live_price(portfolio[name]["code"])
+        saved_p = st.session_state.db["manual_prices"].get(name)
+        price_dict[name] = saved_p if saved_p is not None else live_p
 
     total_eval = sum(portfolio[name]["qty"] * price_dict[name] for name in active_stocks)
     total_buy_sum = sum(portfolio[name]["total_buy"] for name in active_stocks)
@@ -130,64 +111,63 @@ if active_stocks:
     total_profit = total_eval - total_buy_sum
     total_rate = (total_profit / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
-    # 기간별 자산 변동 (복구)
-    today_str = datetime.date.today().isoformat()
-    st.session_state.db["history"][today_str] = total_asset
-    save_data(st.session_state.db)
+    # ✨ 지표 레이아웃 (3개씩 두 줄)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("💰 예수금", f"{int(cash):,}원")
+    c2.metric("📥 총매수액", f"{int(total_buy_sum):,}원")
+    c3.metric("💵 총수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
 
-    def get_history_change(days):
-        hist = st.session_state.db.get("history", {})
-        target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-        past_dates = sorted([d for d in hist.keys() if d <= target_date], reverse=True)
-        if not past_dates: return 0.0, 0
-        past_val = hist[past_dates[0]]
-        return (total_asset - past_val) / past_val * 100, total_asset - past_val
-
-    m1, m2, m3 = st.columns(3)
-    d_rate, d_val = get_history_change(1); w_rate, w_val = get_history_change(7); m_rate, m_val = get_history_change(30)
-    m1.metric("전일 대비", f"{int(d_val):+,}원", f"{d_rate:+.2f}%")
-    m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
-    m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("📈 총평가액", f"{int(total_eval):,}원")
+    c5.metric("🏦 총자산", f"{int(total_asset):,}원")
+    c6.metric("📊 수익률", f"{total_rate:+.2f}%")
 
     st.divider()
 
-    # 지표 3개씩 두 줄 레이아웃
-    r1_1, r1_2, r1_3 = st.columns(3)
-    r1_1.metric("💰 예수금", f"{int(cash):,}원")
-    r1_2.metric("📥 총매수액", f"{int(total_buy_sum):,}원")
-    r1_3.metric("💵 총수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
-
-    r2_1, r2_2, r2_3 = st.columns(3)
-    r2_1.metric("📈 총평가액", f"{int(total_eval):,}원")
-    r2_2.metric("🏦 총자산", f"{int(total_asset):,}원")
-    r2_3.metric("📊 수익률", f"{total_rate:+.2f}%")
-
-    st.divider()
-
-    # 📋 7. 종목 상세 표 (현재가 항목 및 글자색 적용)
-    st.markdown("#### 📋 보유 종목 상세")
+    # 📋 7. 종목 상세 표 (현재가 고정 및 색상 적용)
+    st.markdown("#### 📋 보유 종목 상세 (현재가 포함)")
     res_list = []
     for name in active_stocks:
-        d = portfolio[name]; curr_p = price_dict[name]; avg_p = d["total_buy"] / d["qty"]
+        d = portfolio[name]
+        curr_p = price_dict[name]
+        avg_p = d["total_buy"] / d["qty"]
         eval_amt = d["qty"] * curr_p
+        profit_rate = ((curr_p - avg_p) / avg_p * 100) if avg_p > 0 else 0
+        
         res_list.append({
-            "종목": name, "수량": float(d["qty"]), "평단": float(avg_p), 
-            "현재가": float(curr_p), "평가액": float(eval_amt), 
-            "수익률": float((curr_p-avg_p)/avg_p*100), "비중(%)": float(eval_amt/total_asset*100)
+            "종목": name,
+            "수량": int(d["qty"]),
+            "평단": int(avg_p),
+            "현재가": int(curr_p), # 이 열이 무조건 생성됨
+            "평가액": int(eval_amt),
+            "수익률": round(profit_rate, 2),
+            "비중": round(eval_amt / total_asset * 100, 1)
         })
-    res_list.append({"종목": "💰 예수금", "수량": 0, "평단": 0, "현재가": 0, "평가액": float(cash), "수익률": 0, "비중(%)": float(cash/total_asset*100)})
     
-    # 표 스타일 적용 (수익률 빨강/파랑 강조)
-    def style_profit(val):
-        color = '#e63946' if val > 0 else '#457b9d' if val < 0 else 'black'
+    # 데이터프레임 생성
+    final_df = pd.DataFrame(res_list)
+
+    # 수익률 색상 스타일 함수
+    def color_profit(val):
+        color = 'red' if val > 0 else 'blue' if val < 0 else 'black'
         return f'color: {color}; font-weight: bold'
 
-    df_final = pd.DataFrame(res_list)
-    st.dataframe(df_final.style.format({
-        "수량": lambda x: f"{int(x):,}" if x > 0 else "-",
-        "평단": lambda x: f"{int(x):,}" if x > 0 else "-",
-        "현재가": lambda x: f"{int(x):,}" if x > 0 else "-",
-        "평가액": "{:,.0f}", "수익률": "{:+.2f}%", "비중(%)": "{:.2f}%"
-    }).map(style_profit, subset=["수익률"]), width="stretch", hide_index=True)
-else:
-    st.info("표시할 종목이 없습니다. 사이드바에서 설정을 확인하세요.")
+    st.dataframe(
+        final_df.style.format({
+            "수량": "{:,}", "평단": "{:,}", "현재가": "{:,}", 
+            "평가액": "{:,}", "수익률": "{:+.2f}%", "비중": "{:.1f}%"
+        }).map(color_profit, subset=["수익률"]),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # 시세 수정 (하단 배치)
+    with st.expander("💹 시세 수동 수정"):
+        scols = st.columns(4)
+        for i, name in enumerate(active_stocks):
+            with scols[i % 4]:
+                new_p = st.number_input(f"{name}", value=int(price_dict[name]), key=f"edit_{name}")
+                if new_p != price_dict[name]:
+                    st.session_state.db["manual_prices"][name] = new_p
+                    save_data(st.session_state.db)
+                    st.rerun()
