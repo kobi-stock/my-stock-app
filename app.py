@@ -4,19 +4,20 @@ import requests
 import os
 import json
 import re
+import datetime
 
-# 💾 1. 데이터 관리
+# 💾 1. 데이터 저장 및 로드
 DATA_FILE = "portfolio_data.json"
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                for key in ["cash", "manual_prices", "api_keys"]:
+                for key in ["cash", "manual_prices", "api_keys", "history"]:
                     if key not in data: data[key] = {}
                 return data
-        except: return {"cash": {}, "manual_prices": {}, "api_keys": {}}
-    return {"cash": {}, "manual_prices": {}, "api_keys": {}}
+        except: return {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
+    return {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding='utf-8') as f:
@@ -25,8 +26,8 @@ def save_data(data):
 if 'db' not in st.session_state:
     st.session_state.db = load_data()
 
-# 💹 2. 시세 엔진 (가격을 고정하기 위해 캐시 시간을 대폭 늘림)
-@st.cache_data(ttl=300) # 5분 동안 시세 고정
+# 💹 2. 시세 엔진 (5분간 고정)
+@st.cache_data(ttl=300)
 def fetch_live_price(code):
     if not code or pd.isna(code): return 0
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
@@ -36,35 +37,30 @@ def fetch_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📱 3. UI 설정
+# 📱 3. UI 및 사이드바 설정
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
 st.markdown("<style>[data-testid='stMetricValue'] { font-size: 1.4rem !important; }</style>", unsafe_allow_html=True)
 
-# 📂 4. 데이터 로드 및 계좌 선택 (전체 계좌 복구)
-st.sidebar.title("🛠️ 설정")
+st.sidebar.title("🛠️ 계좌 관리")
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
-account_list = ["전체 계좌"] + list(TAB_INFO.keys())
-selected_account = st.sidebar.selectbox("계좌 선택", account_list)
+selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
+# 📂 4. 데이터 통합 로직
 @st.cache_data(ttl=10)
 def load_sheet_data(gid):
     url = f"https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv&gid={gid}"
     try: return pd.read_csv(url, dtype=str)
     except: return pd.DataFrame()
 
-# 데이터 통합 로직
 if selected_account == "전체 계좌":
-    dfs = []
-    total_cash = 0
-    for name, gid in TAB_INFO.items():
-        dfs.append(load_sheet_data(gid))
-        total_cash += int(st.session_state.db["cash"].get(name, 0))
+    dfs = [load_sheet_data(gid) for gid in TAB_INFO.values()]
     df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-    cash = total_cash
+    cash = sum(int(st.session_state.db["cash"].get(name, 0)) for name in TAB_INFO.keys())
+    st.sidebar.info(f"전체 예수금: {cash:,}원")
 else:
     df = load_sheet_data(TAB_INFO[selected_account])
     saved_cash = int(st.session_state.db["cash"].get(selected_account, 0))
-    cash = st.sidebar.number_input(f"💰 {selected_account} 예수금", value=saved_cash, step=10000)
+    cash = st.sidebar.number_input(f"💰 {selected_account} 예수금 입력", value=saved_cash, step=10000)
     if cash != saved_cash:
         st.session_state.db["cash"][selected_account] = cash
         save_data(st.session_state.db)
@@ -90,13 +86,13 @@ if not df.empty:
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
-# 🏦 6. 메인 화면
+# 🏦 6. 메인 화면 출력
 st.title(f"📊 {selected_account} 현황")
 
 price_dict = {}
 if active_stocks:
-    # 시세 수동 수정 (가격 고정용)
-    with st.expander("💹 시세 수동 수정 (입력 시 가격 고정)", expanded=False):
+    # 시세 수동 수정
+    with st.expander("💹 시세 수동 수정 (가격 고정)", expanded=False):
         cols = st.columns(3)
         for i, name in enumerate(active_stocks):
             live_p = fetch_live_price(portfolio[name]["code"])
@@ -115,9 +111,30 @@ if active_stocks:
     total_profit = total_eval - total_buy_sum
     total_rate = (total_profit / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
+    # 히스토리 기록 (기간별 수익률용)
+    today_str = datetime.date.today().isoformat()
+    st.session_state.db["history"][today_str] = total_asset
+    save_data(st.session_state.db)
+
+    def get_history_change(days):
+        hist = st.session_state.db.get("history", {})
+        target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+        past_dates = sorted([d for d in hist.keys() if d <= target_date], reverse=True)
+        if not past_dates: return 0.0, 0
+        past_val = hist[past_dates[0]]
+        return (total_asset - past_val) / past_val * 100, total_asset - past_val
+
+    # 📈 기간별 자산 변동 (일/주/월)
+    st.markdown("#### 📅 기간별 자산 변동")
+    m1, m2, m3 = st.columns(3)
+    d_rate, d_val = get_history_change(1); w_rate, w_val = get_history_change(7); m_rate, m_val = get_history_change(30)
+    m1.metric("전일 대비", f"{int(d_val):+,}원", f"{d_rate:+.2f}%")
+    m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
+    m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
+
     st.divider()
 
-    # ✨ 레이아웃: 3개씩 두 줄
+    # ✨ 지표 레이아웃 (3개씩 두 줄)
     c1, c2, c3 = st.columns(3)
     c1.metric("💰 예수금", f"{int(cash):,}원")
     c2.metric("📥 총매수액", f"{int(total_buy_sum):,}원")
@@ -131,28 +148,23 @@ if active_stocks:
     st.divider()
 
     # 📋 7. 종목 현황 표 (현재가 포함)
+    st.markdown("#### 📋 보유 종목 상세")
     res_list = []
     for name in active_stocks:
-        d = portfolio[name]
-        curr_p = price_dict[name]
-        avg_p = d["total_buy"] / d["qty"]
+        d = portfolio[name]; curr_p = price_dict[name]; avg_p = d["total_buy"] / d["qty"]
         eval_amt = d["qty"] * curr_p
         res_list.append({
             "종목": name, "수량": float(d["qty"]), "평단": float(avg_p), 
             "현재가": float(curr_p), "평가액": float(eval_amt), 
             "수익률": float((curr_p-avg_p)/avg_p*100), "비중(%)": float(eval_amt/total_asset*100)
         })
-    # 예수금 추가
-    res_list.append({
-        "종목": "💰 예수금", "수량": 0, "평단": 0, "현재가": 0, 
-        "평가액": float(cash), "수익률": 0, "비중(%)": float(cash/total_asset*100)
-    })
+    res_list.append({"종목": "💰 예수금", "수량": 0, "평단": 0, "현재가": 0, "평가액": float(cash), "수익률": 0, "비중(%)": float(cash/total_asset*100)})
     
     st.dataframe(pd.DataFrame(res_list).style.format({
         "수량": lambda x: f"{int(x):,}" if x > 0 else "-",
         "평단": lambda x: f"{int(x):,}" if x > 0 else "-",
-        "현재가": lambda x: f"{int(x):,}" if x > 0 else "-", # 현재가 포맷 복구
+        "현재가": lambda x: f"{int(x):,}" if x > 0 else "-",
         "평가액": "{:,.0f}", "수익률": "{:+.2f}%", "비중(%)": "{:.2f}%"
     }), width="stretch", hide_index=True)
 else:
-    st.info("표시할 종목이 없습니다.")
+    st.info("데이터가 없습니다. 사이드바에서 예수금을 입력하거나 구글 시트를 확인하세요.")
