@@ -26,7 +26,7 @@ def save_data(data):
 if 'db' not in st.session_state:
     st.session_state.db = load_data()
 
-# 💹 2. 시세 엔진 (5분간 고정)
+# 💹 2. 시세 엔진 (5분 캐시)
 @st.cache_data(ttl=300)
 def fetch_live_price(code):
     if not code or pd.isna(code): return 0
@@ -37,26 +37,45 @@ def fetch_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📱 3. UI 및 사이드바 설정
+# 📱 3. UI 설정 및 스타일 (색상 적용)
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
-st.markdown("<style>[data-testid='stMetricValue'] { font-size: 1.4rem !important; }</style>", unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    [data-testid='stMetricValue'] { font-size: 1.4rem !important; }
+    .red-text { color: #e63946; font-weight: bold; }
+    .blue-text { color: #457b9d; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
-st.sidebar.title("🛠️ 계좌 관리")
+# 🛠️ 4. 사이드바 (API 입력창 및 계좌 설정)
+st.sidebar.title("🛠️ 설정 및 API")
+
+# 한투 API 입력창 복구
+with st.sidebar.expander("🔐 API 정보 설정 (한투)", expanded=False):
+    ak = st.text_input("App Key", value=st.session_state.db["api_keys"].get("key", ""), type="password")
+    as_ = st.text_input("App Secret", value=st.session_state.db["api_keys"].get("secret", ""), type="password")
+    if st.button("API 정보 저장"):
+        st.session_state.db["api_keys"] = {"key": ak, "secret": as_}
+        save_data(st.session_state.db)
+        st.success("저장되었습니다!")
+
+st.sidebar.divider()
+
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
-# 📂 4. 데이터 통합 로직
 @st.cache_data(ttl=10)
 def load_sheet_data(gid):
     url = f"https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv&gid={gid}"
     try: return pd.read_csv(url, dtype=str)
     except: return pd.DataFrame()
 
+# 예수금 및 데이터 로드
 if selected_account == "전체 계좌":
     dfs = [load_sheet_data(gid) for gid in TAB_INFO.values()]
     df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
     cash = sum(int(st.session_state.db["cash"].get(name, 0)) for name in TAB_INFO.keys())
-    st.sidebar.info(f"전체 예수금: {cash:,}원")
+    st.sidebar.info(f"합산 예수금: {cash:,}원")
 else:
     df = load_sheet_data(TAB_INFO[selected_account])
     saved_cash = int(st.session_state.db["cash"].get(selected_account, 0))
@@ -86,13 +105,13 @@ if not df.empty:
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
-# 🏦 6. 메인 화면 출력
+# 🏦 6. 메인 화면
 st.title(f"📊 {selected_account} 현황")
 
 price_dict = {}
 if active_stocks:
-    # 시세 수동 수정
-    with st.expander("💹 시세 수동 수정 (가격 고정)", expanded=False):
+    # 시세 수정 확장칸
+    with st.expander("💹 시세 수동 수정 (가격 박제 시 이용)", expanded=False):
         cols = st.columns(3)
         for i, name in enumerate(active_stocks):
             live_p = fetch_live_price(portfolio[name]["code"])
@@ -111,7 +130,7 @@ if active_stocks:
     total_profit = total_eval - total_buy_sum
     total_rate = (total_profit / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
-    # 히스토리 기록 (기간별 수익률용)
+    # 기간별 자산 변동 (복구)
     today_str = datetime.date.today().isoformat()
     st.session_state.db["history"][today_str] = total_asset
     save_data(st.session_state.db)
@@ -124,8 +143,6 @@ if active_stocks:
         past_val = hist[past_dates[0]]
         return (total_asset - past_val) / past_val * 100, total_asset - past_val
 
-    # 📈 기간별 자산 변동 (일/주/월)
-    st.markdown("#### 📅 기간별 자산 변동")
     m1, m2, m3 = st.columns(3)
     d_rate, d_val = get_history_change(1); w_rate, w_val = get_history_change(7); m_rate, m_val = get_history_change(30)
     m1.metric("전일 대비", f"{int(d_val):+,}원", f"{d_rate:+.2f}%")
@@ -134,20 +151,20 @@ if active_stocks:
 
     st.divider()
 
-    # ✨ 지표 레이아웃 (3개씩 두 줄)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("💰 예수금", f"{int(cash):,}원")
-    c2.metric("📥 총매수액", f"{int(total_buy_sum):,}원")
-    c3.metric("💵 총수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
+    # 지표 3개씩 두 줄 레이아웃
+    r1_1, r1_2, r1_3 = st.columns(3)
+    r1_1.metric("💰 예수금", f"{int(cash):,}원")
+    r1_2.metric("📥 총매수액", f"{int(total_buy_sum):,}원")
+    r1_3.metric("💵 총수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
 
-    c4, c5, c6 = st.columns(3)
-    c4.metric("📈 총평가액", f"{int(total_eval):,}원")
-    c5.metric("🏦 총자산", f"{int(total_asset):,}원")
-    c6.metric("📊 수익률", f"{total_rate:+.2f}%")
+    r2_1, r2_2, r2_3 = st.columns(3)
+    r2_1.metric("📈 총평가액", f"{int(total_eval):,}원")
+    r2_2.metric("🏦 총자산", f"{int(total_asset):,}원")
+    r2_3.metric("📊 수익률", f"{total_rate:+.2f}%")
 
     st.divider()
 
-    # 📋 7. 종목 현황 표 (현재가 포함)
+    # 📋 7. 종목 상세 표 (현재가 항목 및 글자색 적용)
     st.markdown("#### 📋 보유 종목 상세")
     res_list = []
     for name in active_stocks:
@@ -160,11 +177,17 @@ if active_stocks:
         })
     res_list.append({"종목": "💰 예수금", "수량": 0, "평단": 0, "현재가": 0, "평가액": float(cash), "수익률": 0, "비중(%)": float(cash/total_asset*100)})
     
-    st.dataframe(pd.DataFrame(res_list).style.format({
+    # 표 스타일 적용 (수익률 빨강/파랑 강조)
+    def style_profit(val):
+        color = '#e63946' if val > 0 else '#457b9d' if val < 0 else 'black'
+        return f'color: {color}; font-weight: bold'
+
+    df_final = pd.DataFrame(res_list)
+    st.dataframe(df_final.style.format({
         "수량": lambda x: f"{int(x):,}" if x > 0 else "-",
         "평단": lambda x: f"{int(x):,}" if x > 0 else "-",
         "현재가": lambda x: f"{int(x):,}" if x > 0 else "-",
         "평가액": "{:,.0f}", "수익률": "{:+.2f}%", "비중(%)": "{:.2f}%"
-    }), width="stretch", hide_index=True)
+    }).map(style_profit, subset=["수익률"]), width="stretch", hide_index=True)
 else:
-    st.info("데이터가 없습니다. 사이드바에서 예수금을 입력하거나 구글 시트를 확인하세요.")
+    st.info("표시할 종목이 없습니다. 사이드바에서 설정을 확인하세요.")
