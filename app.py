@@ -8,7 +8,7 @@ import re
 import datetime
 
 # -------------------------------
-# 💾 1. 데이터 관리 및 초기화 (에러 수정됨)
+# 💾 1. 데이터 관리 및 초기화
 # -------------------------------
 DATA_FILE = "portfolio_data.json"
 
@@ -17,11 +17,9 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                # 각 필수 키가 없으면 자동으로 생성하여 KeyError 방지
                 keys = ["cash", "manual_prices", "api_keys", "history"]
                 for key in keys:
-                    if key not in data:
-                        data[key] = {}
+                    if key not in data: data[key] = {}
                 return data
         except:
             return {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
@@ -35,7 +33,7 @@ if 'db' not in st.session_state:
     st.session_state.db = load_data()
 
 # -------------------------------
-# 🔑 2. 한국투자증권 API
+# 🔑 2. 한국투자증권 API (생략 가능하나 구조 유지)
 # -------------------------------
 def get_kis_token(app_key, app_secret):
     url = "https://openapi.koreainvestment.com:9443/oauth2/tokenP"
@@ -55,12 +53,20 @@ def get_kis_price(code, app_key, app_secret, token):
     except: return None
 
 # -------------------------------
-# 📱 3. UI 및 사이드바
+# 📱 3. UI 설정 및 스타일 (글자 크기 조정)
 # -------------------------------
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
-st.markdown("<style>.main .block-container { max-width: 900px; padding-top: 2rem; }</style>", unsafe_allow_html=True)
 
-st.sidebar.title("🔐 API 설정")
+# CSS를 사용하여 메트릭 숫자 크기를 적절하게 줄임
+st.markdown("""
+    <style>
+    [data-testid="stMetricValue"] { font-size: 1.6rem !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
+    .main .block-container { max-width: 900px; padding-top: 1.5rem; }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.sidebar.title("🔐 설정 및 관리")
 ak = st.sidebar.text_input("App Key", value=st.session_state.db["api_keys"].get("key", ""), type="password")
 as_ = st.sidebar.text_input("App Secret", value=st.session_state.db["api_keys"].get("secret", ""), type="password")
 if st.sidebar.button("API 정보 저장"):
@@ -68,7 +74,7 @@ if st.sidebar.button("API 정보 저장"):
     save_data(st.session_state.db)
     st.sidebar.success("저장 완료")
 
-if st.sidebar.button("🔄 모든 데이터 초기화 (기록 포함)"):
+if st.sidebar.button("🔄 데이터 초기화 (기록 포함)"):
     st.session_state.db = {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
     save_data(st.session_state.db)
     st.rerun()
@@ -137,19 +143,19 @@ for _, row in df.iterrows():
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
-# 🏦 7. 메인 화면 및 변동률 계산
+# 🏦 7. 메인 화면 출력
 st.title(f"📊 {selected_account} 현황")
 price_dict = {}
 
 if active_stocks:
-    st.markdown("### 💹 실시간 시세 (틀릴 경우 직접 수정 가능)")
+    st.markdown("#### 💹 실시간 시세 수정")
     cols = st.columns(4)
     for i, name in enumerate(active_stocks):
         live_p = fetch_live_price(portfolio[name]["code"])
         saved_p = st.session_state.db["manual_prices"].get(name)
         display_val = saved_p if saved_p is not None else live_p
         with cols[i % 4]:
-            p_in = st.number_input(f"{name} ({live_p:,})", value=int(display_val), key=f"inp_{name}")
+            p_in = st.number_input(f"{name}", value=int(display_val), key=f"inp_{name}")
             if p_in != (saved_p if saved_p is not None else live_p):
                 st.session_state.db["manual_prices"][name] = p_in
                 save_data(st.session_state.db)
@@ -162,11 +168,9 @@ if active_stocks:
 
     total_asset = cash + total_eval
     
-    # --- 히스토리 기록 (에러 방지형) ---
+    # 히스토리 기록
     today_str = datetime.date.today().isoformat()
-    if "history" not in st.session_state.db:
-        st.session_state.db["history"] = {}
-    
+    if st.session_state.db.get("history") is None: st.session_state.db["history"] = {}
     if st.session_state.db["history"].get(today_str) != total_asset:
         st.session_state.db["history"][today_str] = total_asset
         save_data(st.session_state.db)
@@ -179,11 +183,10 @@ if active_stocks:
         past_val = hist[past_dates[0]]
         return (total_asset - past_val) / past_val * 100, total_asset - past_val
 
-    # 기간별 지표 표시
+    # 기간별 자산 변동 (숫자 크기 조정됨)
     st.divider()
-    st.markdown("### 📈 기간별 자산 변동")
+    st.markdown("#### 📈 기간별 자산 변동")
     m1, m2, m3 = st.columns(3)
-    
     d_rate, d_val = get_history_change(1)
     w_rate, w_val = get_history_change(7)
     m_rate, m_val = get_history_change(30)
@@ -192,27 +195,41 @@ if active_stocks:
     m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
     m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
 
-    # 계좌 요약
+    # 계좌 요약 카드 (숫자 크기 조정됨)
     st.divider()
     total_profit = total_eval - total_buy_sum
     total_rate = (total_profit / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
     c1, c2, c3 = st.columns(3); c4, c5, c6 = st.columns(3)
-    with c1: st.metric("💰 예수금", f"{int(cash):,}원")
-    with c2: st.metric("📥 총 매수액", f"{int(total_buy_sum):,}원")
-    with c3: st.metric("💵 총 수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
-    with c4: st.metric("📈 총 평가액", f"{int(total_eval):,}원")
-    with c5: st.metric("🏦 총 자산", f"{int(total_asset):,}원")
-    with c6: st.metric("📊 수익률", f"{total_rate:+.2f}%")
+    c1.metric("💰 예수금", f"{int(cash):,}원")
+    c2.metric("📥 총 매수액", f"{int(total_buy_sum):,}원")
+    c3.metric("💵 총 수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
+    c4.metric("📈 총 평가액", f"{int(total_eval):,}원")
+    c5.metric("🏦 총 자산", f"{int(total_asset):,}원")
+    c6.metric("📊 수익률", f"{total_rate:+.2f}%")
 
-    # 종목 테이블
-    st.markdown("### 📋 보유 종목 현황")
+    # 📋 8. 보유 종목 현황 (수익률 색상 적용)
+    st.divider()
+    st.markdown("#### 📋 보유 종목 현황")
     res_data = []
     for name in active_stocks:
-        d = portfolio[name]; curr_p = price_dict[name]; avg_p = d["total_buy"] / d["qty"]
-        res_data.append([name, d["qty"], int(avg_p), curr_p, int(d["qty"]*curr_p), round((curr_p-avg_p)/avg_p*100, 2)])
+        d = portfolio[name]
+        curr_p = price_dict[name]
+        avg_p = d["total_buy"] / d["qty"]
+        profit_rate = round((curr_p - avg_p) / avg_p * 100, 2)
+        res_data.append([name, d["qty"], int(avg_p), curr_p, int(d["qty"] * curr_p), profit_rate])
     
     df_final = pd.DataFrame(res_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률"])
-    st.dataframe(df_final.style.format({
-        "수량": "{:,.0f}", "평단": "{:,.0f}", "현재가": "{:,.0f}", "평가액": "{:,.0f}", "수익률": "{:+.2f}%"
-    }), use_container_width=True)
+
+    # 스타일 적용 함수: 수익률에 따른 텍스트 색상 변경
+    def color_profit(val):
+        color = '#e63946' if val > 0 else '#457b9d' if val < 0 else 'black'
+        return f'color: {color}; font-weight: bold;'
+
+    st.dataframe(
+        df_final.style.format({
+            "수량": "{:,.0f}", "평단": "{:,.0f}", "현재가": "{:,.0f}", "평가액": "{:,.0f}", "수익률": "{:+.2f}%"
+        }).map(color_profit, subset=["수익률"]), 
+        use_container_width=True,
+        hide_index=True
+    )
