@@ -65,7 +65,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 사이드바 설정 - API 입력을 접을 수 있게 수정
 st.sidebar.title("🛠️ 환경 설정")
 with st.sidebar.expander("🔐 API 정보 입력/수정", expanded=False):
     ak = st.text_input("App Key", value=st.session_state.db["api_keys"].get("key", ""), type="password")
@@ -109,31 +108,25 @@ if df.empty: st.warning("데이터 로딩 중..."); st.stop()
 # 💹 5. 시세 엔진 (보강됨)
 token = get_kis_token(ak, as_) if ak and as_ else None
 
-@st.cache_data(ttl=2) # 캐시 시간을 2초로 줄여 더 자주 갱신되게 함
+@st.cache_data(ttl=5)
 def fetch_live_price(code):
     if not code or pd.isna(code): return 0
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
-    
-    # 1순위: 한국투자증권 API (가장 정확함)
     if token:
         p = get_kis_price(clean_code, ak, as_, token)
         if p and p > 0: return p
-    
-    # 2순위: 네이버 금융 실시간 페이지 (API 실패 시 대안)
     try:
-        # 실시간성이 더 높은 다른 경로 시도
         url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{clean_code}"
-        r = requests.get(url, timeout=2)
-        data = r.json()
+        data = requests.get(url, timeout=2).json()
         return int(data['result']['areas'][0]['datas'][0]['nv'])
     except:
         try:
             url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
-            h = {'User-Agent': 'Mozilla/5.0'}
-            r = requests.get(url, headers=h, timeout=2)
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=2)
             soup = BeautifulSoup(r.text, "html.parser")
             return int(soup.select_one(".no_today .blind").text.replace(",", ""))
         except: return 0
+
 # 📊 6. 포트폴리오 계산
 portfolio = {}
 for _, row in df.iterrows():
@@ -154,7 +147,7 @@ for _, row in df.iterrows():
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
-# 🏦 7. 메인 화면 출력
+# 🏦 7. 메인 화면
 st.title(f"📊 {selected_account} 현황")
 price_dict = {}
 
@@ -179,12 +172,11 @@ if active_stocks:
 
     total_asset = cash + total_eval
     
-    # 히스토리 기록
+    # 히스토리 및 변동률
     today_str = datetime.date.today().isoformat()
     if st.session_state.db.get("history") is None: st.session_state.db["history"] = {}
-    if st.session_state.db["history"].get(today_str) != total_asset:
-        st.session_state.db["history"][today_str] = total_asset
-        save_data(st.session_state.db)
+    st.session_state.db["history"][today_str] = total_asset
+    save_data(st.session_state.db)
 
     def get_history_change(days):
         hist = st.session_state.db.get("history", {})
@@ -194,62 +186,53 @@ if active_stocks:
         past_val = hist[past_dates[0]]
         return (total_asset - past_val) / past_val * 100, total_asset - past_val
 
-    # 기간별 자산 변동
     st.divider()
     st.markdown("#### 📈 기간별 자산 변동")
     m1, m2, m3 = st.columns(3)
-    d_rate, d_val = get_history_change(1); w_rate, w_val = get_history_change(7); m_rate, m_val = get_history_change(30)
-    m1.metric("전일 대비", f"{int(d_val):+,}원", f"{d_rate:+.2f}%")
-    m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
-    m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
+    for col, days, label in zip([m1, m2, m3], [1, 7, 30], ["전일", "전주", "전월"]):
+        rate, val = get_history_change(days)
+        col.metric(f"{label} 대비", f"{int(val):+,}원", f"{rate:+.2f}%")
 
-    # 계좌 요약 카드
     st.divider()
     total_profit = total_eval - total_buy_sum
     total_rate = (total_profit / total_buy_sum * 100) if total_buy_sum > 0 else 0
-
-    c1, c2, c3 = st.columns(3); c4, c5, c6 = st.columns(3)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("💰 예수금", f"{int(cash):,}원")
-    c2.metric("📥 총 매수액", f"{int(total_buy_sum):,}원")
-    c3.metric("💵 총 수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
-    c4.metric("📈 총 평가액", f"{int(total_eval):,}원")
-    c5.metric("🏦 총 자산", f"{int(total_asset):,}원")
+    c2.metric("📥 총매수액", f"{int(total_buy_sum):,}원")
+    c3.metric("💵 총수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
+    c4.metric("📈 총평가액", f"{int(total_eval):,}원")
+    c5.metric("🏦 총자산", f"{int(total_asset):,}원")
     c6.metric("📊 수익률", f"{total_rate:+.2f}%")
 
-    # 📋 8. 보유 종목 현황 (비중 추가 및 수익률 색상 적용)
+    # 📋 8. 보유 종목 현황 (데이터 타입 에러 수정)
     st.divider()
     st.markdown("#### 📋 보유 종목 현황")
-    res_data = []
-    
-    # 1. 종목 데이터 추가
+    res_list = []
     for name in active_stocks:
-        d = portfolio[name]
-        curr_p = price_dict[name]
-        avg_p = d["total_buy"] / d["qty"]
-        profit_rate = round((curr_p - avg_p) / avg_p * 100, 2)
-        eval_amount = int(d["qty"] * curr_p)
-        weight = round((eval_amount / total_asset * 100), 2)
-        res_data.append([name, d["qty"], int(avg_p), curr_p, eval_amount, profit_rate, weight])
+        d = portfolio[name]; curr_p = price_dict[name]; avg_p = d["total_buy"] / d["qty"]
+        eval_amt = d["qty"] * curr_p
+        res_list.append({
+            "종목": name, "수량": float(d["qty"]), "평단": float(avg_p), 
+            "현재가": float(curr_p), "평가액": float(eval_amt), 
+            "수익률": float((curr_p-avg_p)/avg_p*100), "비중(%)": float(eval_amt/total_asset*100)
+        })
+    # 예수금 추가 (데이터 타입 일치를 위해 숫자 0 사용)
+    res_list.append({
+        "종목": "💰 예수금", "수량": 0.0, "평단": 0.0, "현재가": 0.0, 
+        "평가액": float(cash), "수익률": 0.0, "비중(%)": float(cash/total_asset*100)
+    })
     
-    # 2. 예수금 데이터 추가 (비중 포함)
-    cash_weight = round((cash / total_asset * 100), 2)
-    res_data.append(["💰 예수금", "-", "-", "-", int(cash), "-", cash_weight])
-    
-    df_final = pd.DataFrame(res_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+    df_final = pd.DataFrame(res_list)
 
-    # 스타일 적용 함수
-    def color_profit(val):
-        if val == "-": return ""
-        try:
-            v = float(val)
-            color = '#e63946' if v > 0 else '#457b9d' if v < 0 else 'black'
-            return f'color: {color}; font-weight: bold;'
-        except: return ""
-
+    # 스타일 및 포맷 (0.0은 '-'로 표시되게 처리)
     st.dataframe(
         df_final.style.format({
-            "수량": "{:}", "평단": "{:}", "현재가": "{:}", "평가액": "{:,.0f}", "수익률": "{:}", "비중(%)": "{:.2f}%"
-        }).map(color_profit, subset=["수익률"]), 
-        use_container_width=True,
-        hide_index=True
+            "수량": lambda x: f"{int(x):,}" if x > 0 else "-",
+            "평단": lambda x: f"{int(x):,}" if x > 0 else "-",
+            "현재가": lambda x: f"{int(x):,}" if x > 0 else "-",
+            "평가액": "{:,.0f}",
+            "수익률": lambda x: f"{x:+.2f}%" if x != 0 else "-",
+            "비중(%)": "{:.2f}%"
+        }).map(lambda x: f"color: {'#e63946' if x > 0 else '#457b9d' if x < 0 else 'black'}; font-weight: bold;", subset=["수익률"]),
+        width="stretch", hide_index=True
     )
