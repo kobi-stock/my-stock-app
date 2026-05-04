@@ -14,7 +14,6 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                # 필요한 필드 보장
                 for key in ["cash", "api_keys", "history"]:
                     if key not in data: data[key] = {}
                 return data
@@ -31,21 +30,31 @@ if 'db' not in st.session_state:
 
 db = st.session_state.db
 
-# 💹 2. 실시간 시세 엔진 (수동 수정 없음)
+# 💹 2. 실시간 시세 엔진
 @st.cache_data(ttl=5)
 def get_live_price(code):
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
     try:
-        # 네이버 실시간 API로 가장 정확한 시세 반영
         url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{clean_code}"
         res = requests.get(url, timeout=2).json()
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except:
         return 0
 
-# 📱 3. 화면 설정
+# 📱 3. 화면 설정 및 글자 크기 조정 (CSS)
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
-st.markdown("<style>[data-testid='stMetricValue'] { font-size: 1.4rem !important; }</style>", unsafe_allow_html=True)
+st.markdown("""
+<style>
+    /* 메인 제목 크기 줄임 */
+    h1 { font-size: 1.8rem !important; }
+    /* 지표(Metric) 숫자 크기 줄임 */
+    [data-testid='stMetricValue'] { font-size: 1.1rem !important; }
+    /* 지표 라벨 크기 줄임 */
+    [data-testid='stMetricLabel'] { font-size: 0.85rem !important; }
+    /* 서브헤더 크기 조정 */
+    h3 { font-size: 1.3rem !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # 📂 4. 데이터 로드 설정
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
@@ -56,7 +65,7 @@ def load_sheet_data(gid):
     try: return pd.read_csv(f"{SHEET_BASE}&gid={gid}", dtype=str)
     except: return pd.DataFrame()
 
-# 사이드바: 계좌 선택
+# 사이드바: 계좌 선택[cite: 1]
 st.sidebar.title("🔐 계좌 설정")
 selected_account = st.sidebar.selectbox("대상 계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
@@ -68,7 +77,7 @@ else:
     df = load_sheet_data(TAB_INFO[selected_account])
     total_cash = int(db["cash"].get(selected_account, 0))
 
-# 기본 포트폴리오 계산
+# 포트폴리오 계산[cite: 1]
 portfolio = {}
 if not df.empty:
     for _, row in df.iterrows():
@@ -90,11 +99,11 @@ if not df.empty:
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # =========================================================
-# 1️⃣ [레이아웃 1] 예수금 입력
+# 1️⃣ 예수금 입력[cite: 1]
 # =========================================================
 st.title(f"📊 {selected_account} 현황")
 if selected_account != "전체 계좌":
-    new_cash = st.number_input(f"💰 {selected_account} 예수금 입력", value=total_cash, step=10000)
+    new_cash = st.number_input(f"💰 예수금 입력", value=total_cash, step=10000)
     if new_cash != total_cash:
         db["cash"][selected_account] = new_cash
         save_data(db)
@@ -103,19 +112,19 @@ else:
     st.info(f"💡 전체 합산 예수금: {total_cash:,}원")
 
 # =========================================================
-# 2️⃣ [레이아웃 2] 보유종목 실시간 현재가 표시 (수정 불가)
+# 2️⃣ 실시간 종목 시세[cite: 1]
 # =========================================================
 price_dict = {}
 if active_stocks:
     st.subheader("💹 실시간 종목 시세")
     cols = st.columns(4)
     for i, name in enumerate(active_stocks):
-        live_p = get_live_price(portfolio[name]["code"]) # 실시간 주가만 사용[cite: 1]
+        live_p = get_live_price(portfolio[name]["code"])
         price_dict[name] = live_p
         with cols[i % 4]:
-            st.metric(label=name, value=f"{live_p:,}원")
+            st.metric(label=name, value=f"{live_p:,}")
 
-    # 요약 데이터 계산[cite: 1]
+    # 자산 계산 로직[cite: 1]
     total_eval, total_buy_sum, result_list = 0, 0, []
     for name in active_stocks:
         d = portfolio[name]
@@ -133,7 +142,7 @@ if active_stocks:
     save_data(db)
 
     # =========================================================
-    # 3️⃣ [레이아웃 3] 계좌 현황 (일별, 주별, 월별 총잔고, 수익률)
+    # 3️⃣ 계좌 변동 현황 (지표 크기 축소 적용됨)[cite: 1]
     # =========================================================
     def get_change(days):
         target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
@@ -143,29 +152,29 @@ if active_stocks:
         return (total_asset - past_val) / past_val * 100, total_asset - past_val
 
     st.divider()
-    st.subheader("📈 계좌 변동 현황 (자산 및 수익률)")
+    st.subheader("📈 계좌 변동 현황")
     m1, m2, m3 = st.columns(3)
     d_rate, d_val = get_change(1); w_rate, w_val = get_change(7); m_rate, m_val = get_change(30)
-    m1.metric("전일 대비", f"{int(d_val):+,}원", f"{d_rate:+.2f}%")
-    m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
-    m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
+    m1.metric("전일 대비", f"{int(d_val):+,}", f"{d_rate:+.2f}%")
+    m2.metric("전주 대비", f"{int(w_val):+,}", f"{w_rate:+.2f}%")
+    m3.metric("전월 대비", f"{int(m_val):+,}", f"{m_rate:+.2f}%")
 
-    # 요약 지표 (3x2 레이아웃)[cite: 1]
+    # 계좌 요약 (3x2)[cite: 1]
     t_profit_amt = total_eval - total_buy_sum
     t_profit_rate = (t_profit_amt / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("💰 예수금", f"{int(total_cash):,}원")
-    c2.metric("📥 총매수액", f"{int(total_buy_sum):,}원")
-    c3.metric("💵 총수익", f"{int(t_profit_amt):+,}원", f"{t_profit_rate:+.2f}%")
+    c1.metric("💰 예수금", f"{int(total_cash):,}")
+    c2.metric("📥 총매수액", f"{int(total_buy_sum):,}")
+    c3.metric("💵 총수익", f"{int(t_profit_amt):+,}", f"{t_profit_rate:+.2f}%")
 
     c4, c5, c6 = st.columns(3)
-    c4.metric("📈 총평가액", f"{int(total_eval):,}원")
-    c5.metric("🏦 총자산", f"{int(total_asset):,}원")
+    c4.metric("📈 총평가액", f"{int(total_eval):,}")
+    c5.metric("🏦 총자산", f"{int(total_asset):,}")
     c6.metric("📊 총수익률", f"{t_profit_rate:+.2f}%")
 
     # =========================================================
-    # 4️⃣ [레이아웃 4] 보유종목현황 (수익률 색상 포함)
+    # 4️⃣ 보유 종목 현황[cite: 1]
     # =========================================================
     st.divider()
     st.subheader("📋 보유 종목 현황")
