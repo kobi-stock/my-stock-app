@@ -8,7 +8,7 @@ import re
 import datetime
 
 # -------------------------------
-# 💾 1. 데이터 관리 및 초기화
+# 💾 1. 데이터 관리 및 초기화 (에러 수정됨)
 # -------------------------------
 DATA_FILE = "portfolio_data.json"
 
@@ -17,8 +17,11 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                for key in ["cash", "manual_prices", "api_keys", "history"]:
-                    if key not in data: data[key] = {}
+                # 각 필수 키가 없으면 자동으로 생성하여 KeyError 방지
+                keys = ["cash", "manual_prices", "api_keys", "history"]
+                for key in keys:
+                    if key not in data:
+                        data[key] = {}
                 return data
         except:
             return {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
@@ -65,8 +68,8 @@ if st.sidebar.button("API 정보 저장"):
     save_data(st.session_state.db)
     st.sidebar.success("저장 완료")
 
-if st.sidebar.button("🔄 모든 수동 시세 초기화"):
-    st.session_state.db["manual_prices"] = {}
+if st.sidebar.button("🔄 모든 데이터 초기화 (기록 포함)"):
+    st.session_state.db = {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
     save_data(st.session_state.db)
     st.rerun()
 
@@ -147,7 +150,7 @@ if active_stocks:
         display_val = saved_p if saved_p is not None else live_p
         with cols[i % 4]:
             p_in = st.number_input(f"{name} ({live_p:,})", value=int(display_val), key=f"inp_{name}")
-            if p_in != saved_p:
+            if p_in != (saved_p if saved_p is not None else live_p):
                 st.session_state.db["manual_prices"][name] = p_in
                 save_data(st.session_state.db)
             price_dict[name] = p_in
@@ -159,14 +162,17 @@ if active_stocks:
 
     total_asset = cash + total_eval
     
-    # --- 히스토리 기록 로직 ---
+    # --- 히스토리 기록 (에러 방지형) ---
     today_str = datetime.date.today().isoformat()
+    if "history" not in st.session_state.db:
+        st.session_state.db["history"] = {}
+    
     if st.session_state.db["history"].get(today_str) != total_asset:
         st.session_state.db["history"][today_str] = total_asset
         save_data(st.session_state.db)
 
     def get_history_change(days):
-        hist = st.session_state.db["history"]
+        hist = st.session_state.db.get("history", {})
         target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
         past_dates = sorted([d for d in hist.keys() if d <= target_date], reverse=True)
         if not past_dates: return 0.0, 0
@@ -175,7 +181,7 @@ if active_stocks:
 
     # 기간별 지표 표시
     st.divider()
-    st.markdown("### 📈 기간별 자산 변동 (데이터 축적 필요)")
+    st.markdown("### 📈 기간별 자산 변동")
     m1, m2, m3 = st.columns(3)
     
     d_rate, d_val = get_history_change(1)
@@ -186,22 +192,18 @@ if active_stocks:
     m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
     m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
 
-    # 기존 계좌 요약 카드
+    # 계좌 요약
     st.divider()
-    st.markdown("### 📊 계좌 요약")
-    def card(t, v, c="black"):
-        return f'<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;"><div style="font-size:12px; color:gray;">{t}</div><div style="font-size:18px; font-weight:bold; color:{c};">{v}</div></div>'
-    
     total_profit = total_eval - total_buy_sum
     total_rate = (total_profit / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
     c1, c2, c3 = st.columns(3); c4, c5, c6 = st.columns(3)
-    with c1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
-    with c2: st.markdown(card("📥 총 매수액", f"{int(total_buy_sum):,}원"), unsafe_allow_html=True)
-    with c3: st.markdown(card("💵 총 수익", f"{int(total_profit):+,}원", "#e63946" if total_profit > 0 else "#457b9d"), unsafe_allow_html=True)
-    with c4: st.markdown(card("📈 총 평가액", f"{int(total_eval):,}원"), unsafe_allow_html=True)
-    with c5: st.markdown(card("🏦 총 자산", f"{int(total_asset):,}원"), unsafe_allow_html=True)
-    with c6: st.markdown(card("📊 수익률", f"{total_rate:+.2f}%", "#e63946" if total_rate > 0 else "#457b9d"), unsafe_allow_html=True)
+    with c1: st.metric("💰 예수금", f"{int(cash):,}원")
+    with c2: st.metric("📥 총 매수액", f"{int(total_buy_sum):,}원")
+    with c3: st.metric("💵 총 수익", f"{int(total_profit):+,}원", f"{total_rate:+.2f}%")
+    with c4: st.metric("📈 총 평가액", f"{int(total_eval):,}원")
+    with c5: st.metric("🏦 총 자산", f"{int(total_asset):,}원")
+    with c6: st.metric("📊 수익률", f"{total_rate:+.2f}%")
 
     # 종목 테이블
     st.markdown("### 📋 보유 종목 현황")
@@ -213,4 +215,4 @@ if active_stocks:
     df_final = pd.DataFrame(res_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률"])
     st.dataframe(df_final.style.format({
         "수량": "{:,.0f}", "평단": "{:,.0f}", "현재가": "{:,.0f}", "평가액": "{:,.0f}", "수익률": "{:+.2f}%"
-    }).map(lambda x: f"color: {'#e63946' if x > 0 else '#457b9d' if x < 0 else 'black'}; font-weight: bold;", subset=["수익률"]), use_container_width=True)
+    }), use_container_width=True)
