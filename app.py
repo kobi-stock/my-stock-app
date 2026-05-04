@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import os
 import json
 import re
+import datetime
 
 # -------------------------------
 # 💾 1. 데이터 관리 및 초기화
@@ -16,12 +17,12 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                for key in ["cash", "manual_prices", "api_keys"]:
+                for key in ["cash", "manual_prices", "api_keys", "history"]:
                     if key not in data: data[key] = {}
                 return data
         except:
-            return {"cash": {}, "manual_prices": {}, "api_keys": {}}
-    return {"cash": {}, "manual_prices": {}, "api_keys": {}}
+            return {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
+    return {"cash": {}, "manual_prices": {}, "api_keys": {}, "history": {}}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding='utf-8') as f:
@@ -64,7 +65,7 @@ if st.sidebar.button("API 정보 저장"):
     save_data(st.session_state.db)
     st.sidebar.success("저장 완료")
 
-if st.sidebar.button("🔄 모든 수동 시세 초기화"): # 이 버튼을 누르면 보령의 2225가 사라집니다.[cite: 1]
+if st.sidebar.button("🔄 모든 수동 시세 초기화"):
     st.session_state.db["manual_prices"] = {}
     save_data(st.session_state.db)
     st.rerun()
@@ -73,7 +74,7 @@ st.sidebar.divider()
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
-# 📂 4. 데이터 로드[cite: 1]
+# 📂 4. 데이터 로드
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 
 @st.cache_data(ttl=10)
@@ -95,24 +96,22 @@ else:
 
 if df.empty: st.warning("데이터 로딩 중..."); st.stop()
 
-# 💹 5. 시세 엔진[cite: 1]
+# 💹 5. 시세 엔진
 token = get_kis_token(ak, as_) if ak and as_ else None
 
 @st.cache_data(ttl=5)
 def fetch_live_price(code):
     if not code or pd.isna(code): return 0
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
-    
     if token:
         p = get_kis_price(clean_code, ak, as_, token)
         if p: return p
     try:
         url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
-        h = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        h = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(url, headers=h, timeout=2)
         soup = BeautifulSoup(r.text, "html.parser")
-        price = soup.select_one(".no_today .blind").text.replace(",", "")
-        return int(price)
+        return int(soup.select_one(".no_today .blind").text.replace(",", ""))
     except: return 0
 
 # 📊 6. 포트폴리오 계산
@@ -135,7 +134,7 @@ for _, row in df.iterrows():
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
-# 🏦 7. 메인 화면
+# 🏦 7. 메인 화면 및 변동률 계산
 st.title(f"📊 {selected_account} 현황")
 price_dict = {}
 
@@ -145,10 +144,7 @@ if active_stocks:
     for i, name in enumerate(active_stocks):
         live_p = fetch_live_price(portfolio[name]["code"])
         saved_p = st.session_state.db["manual_prices"].get(name)
-        
-        # 저장된 수동 시세가 있으면 그걸 쓰고, 없으면 실시간 시세를 사용[cite: 1]
         display_val = saved_p if saved_p is not None else live_p
-        
         with cols[i % 4]:
             p_in = st.number_input(f"{name} ({live_p:,})", value=int(display_val), key=f"inp_{name}")
             if p_in != saved_p:
@@ -156,22 +152,49 @@ if active_stocks:
                 save_data(st.session_state.db)
             price_dict[name] = p_in
 
-    # 집계 로직
-    total_eval, total_buy_sum, res_data = 0, 0, []
+    total_eval, total_buy_sum = 0, 0
     for name in active_stocks:
-        d = portfolio[name]; curr_p = price_dict[name]; avg_p = d["total_buy"] / d["qty"]
-        eval_amt = d["qty"] * curr_p; total_eval += eval_amt; total_buy_sum += d["total_buy"]
-        profit_r = (curr_p - avg_p) / avg_p * 100 if avg_p else 0
-        res_data.append([name, d["qty"], int(avg_p), curr_p, int(eval_amt), round(profit_r, 2)])
+        total_eval += portfolio[name]["qty"] * price_dict[name]
+        total_buy_sum += portfolio[name]["total_buy"]
 
     total_asset = cash + total_eval
+    
+    # --- 히스토리 기록 로직 ---
+    today_str = datetime.date.today().isoformat()
+    if st.session_state.db["history"].get(today_str) != total_asset:
+        st.session_state.db["history"][today_str] = total_asset
+        save_data(st.session_state.db)
+
+    def get_history_change(days):
+        hist = st.session_state.db["history"]
+        target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+        past_dates = sorted([d for d in hist.keys() if d <= target_date], reverse=True)
+        if not past_dates: return 0.0, 0
+        past_val = hist[past_dates[0]]
+        return (total_asset - past_val) / past_val * 100, total_asset - past_val
+
+    # 기간별 지표 표시
+    st.divider()
+    st.markdown("### 📈 기간별 자산 변동 (데이터 축적 필요)")
+    m1, m2, m3 = st.columns(3)
+    
+    d_rate, d_val = get_history_change(1)
+    w_rate, w_val = get_history_change(7)
+    m_rate, m_val = get_history_change(30)
+    
+    m1.metric("전일 대비", f"{int(d_val):+,}원", f"{d_rate:+.2f}%")
+    m2.metric("전주 대비", f"{int(w_val):+,}원", f"{w_rate:+.2f}%")
+    m3.metric("전월 대비", f"{int(m_val):+,}원", f"{m_rate:+.2f}%")
+
+    # 기존 계좌 요약 카드
+    st.divider()
+    st.markdown("### 📊 계좌 요약")
+    def card(t, v, c="black"):
+        return f'<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;"><div style="font-size:12px; color:gray;">{t}</div><div style="font-size:18px; font-weight:bold; color:{c};">{v}</div></div>'
+    
     total_profit = total_eval - total_buy_sum
     total_rate = (total_profit / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
-    def card(t, v, c="black"):
-        return f'<div style="padding:10px; border:1px solid #eee; border-radius:10px; background:#fafafa; text-align:center; margin:5px;"><div style="font-size:12px; color:gray;">{t}</div><div style="font-size:18px; font-weight:bold; color:{c};">{v}</div></div>'
-
-    st.divider()
     c1, c2, c3 = st.columns(3); c4, c5, c6 = st.columns(3)
     with c1: st.markdown(card("💰 예수금", f"{int(cash):,}원"), unsafe_allow_html=True)
     with c2: st.markdown(card("📥 총 매수액", f"{int(total_buy_sum):,}원"), unsafe_allow_html=True)
@@ -180,19 +203,14 @@ if active_stocks:
     with c5: st.markdown(card("🏦 총 자산", f"{int(total_asset):,}원"), unsafe_allow_html=True)
     with c6: st.markdown(card("📊 수익률", f"{total_rate:+.2f}%", "#e63946" if total_rate > 0 else "#457b9d"), unsafe_allow_html=True)
 
-    # 테이블 및 색상 적용[cite: 1]
+    # 종목 테이블
     st.markdown("### 📋 보유 종목 현황")
-    final_rows = [[r[0], r[1], r[2], r[3], r[4], r[5], round(r[4]/total_asset*100, 1)] for r in res_data]
-    final_rows.append(["💰 예수금 합계", None, None, None, int(cash), None, round(cash/total_asset*100, 1)])
-    df_final = pd.DataFrame(final_rows, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
-
-    def color_profit(val):
-        if pd.isna(val) or isinstance(val, str): return ""
-        return f"color: {'#e63946' if val > 0 else '#457b9d' if val < 0 else 'black'}; font-weight: bold;"
-
+    res_data = []
+    for name in active_stocks:
+        d = portfolio[name]; curr_p = price_dict[name]; avg_p = d["total_buy"] / d["qty"]
+        res_data.append([name, d["qty"], int(avg_p), curr_p, int(d["qty"]*curr_p), round((curr_p-avg_p)/avg_p*100, 2)])
+    
+    df_final = pd.DataFrame(res_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률"])
     st.dataframe(df_final.style.format({
-        "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "평가액": "{:,.0f}", "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-", "비중(%)": "{:.1f}%"
-    }).map(color_profit, subset=["수익률"]), use_container_width=True)
+        "수량": "{:,.0f}", "평단": "{:,.0f}", "현재가": "{:,.0f}", "평가액": "{:,.0f}", "수익률": "{:+.2f}%"
+    }).map(lambda x: f"color: {'#e63946' if x > 0 else '#457b9d' if x < 0 else 'black'}; font-weight: bold;", subset=["수익률"]), use_container_width=True)
