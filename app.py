@@ -6,7 +6,7 @@ import json
 import datetime
 import re
 
-# 💾 1. 데이터 관리
+# 💾 1. 데이터 관리[cite: 1]
 DATA_FILE = "portfolio_data.json"
 
 def load_data():
@@ -30,7 +30,7 @@ if 'db' not in st.session_state:
 
 db = st.session_state.db
 
-# 💹 2. 실시간 시세 엔진
+# 💹 2. 실시간 시세 엔진[cite: 1]
 @st.cache_data(ttl=5)
 def get_live_price(code):
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
@@ -41,7 +41,7 @@ def get_live_price(code):
     except:
         return 0
 
-# 📱 3. 화면 설정 및 모바일 최적화 스타일 (가로 배열 강제 적용)
+# 📱 3. 화면 설정 및 모바일 최적화 스타일 (가로 배열 강제 적용)[cite: 1]
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
 
 st.markdown("""
@@ -59,22 +59,22 @@ st.markdown("""
         margin-bottom: 10px;
     }
     
-    /* 개별 카드 스타일 (배경색, 테두리, 그림자 추가) */
+    /* 개별 카드 스타일 */
     .custom-card {
         background-color: #f8f9fa;
         border: 1px solid #e9ecef;
         border-radius: 8px;
         padding: 8px 10px;
         min-width: 100px;
-        flex: 1 1 calc(33.333% - 8px); /* 한 줄에 3개 배치 시도 */
+        flex: 1 1 calc(33.333% - 8px); 
         box-shadow: 1px 1px 3px rgba(0,0,0,0.05);
         text-align: center;
     }
     
-    /* 모바일 화면에서는 2개씩 보이도록 조정 */
+    /* 모바일 화면(480px 이하)에서는 2개씩 보이도록 조정 */
     @media (max-width: 480px) {
         .custom-card {
-            flex: 1 1 calc(50% - 8px); /* 한 줄에 2개 배치 */
+            flex: 1 1 calc(50% - 8px);
         }
     }
     
@@ -86,7 +86,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 📂 4. 데이터 로드 설정
+# 📂 4. 구글 시트 데이터 로드[cite: 1]
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 
@@ -106,7 +106,7 @@ else:
     df = load_sheet_data(TAB_INFO[selected_account])
     total_cash = int(db["cash"].get(selected_account, 0))
 
-# 포트폴리오 계산 로직
+# 포트폴리오 계산[cite: 1]
 portfolio = {}
 if not df.empty:
     for _, row in df.iterrows():
@@ -128,7 +128,7 @@ if not df.empty:
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # =========================================================
-# 1️⃣ 예수금 입력 (상단)
+# 1️⃣ 예수금 입력[cite: 1]
 # =========================================================
 st.title(f"📊 {selected_account}")
 if selected_account != "전체 계좌":
@@ -139,7 +139,7 @@ if selected_account != "전체 계좌":
         st.rerun()
 
 # =========================================================
-# 2️⃣ 실시간 종목 시세 (가로 카드 레이아웃 적용)
+# 2️⃣ 실시간 종목 시세 (카드 레이아웃 렌더링)[cite: 1]
 # =========================================================
 price_dict = {}
 if active_stocks:
@@ -155,9 +155,10 @@ if active_stocks:
         </div>
         """
     stock_html += '</div>'
-    st.markdown(stock_html, unsafe_allow_html=True)
+    # 핵심 수정: unsafe_allow_html=True를 사용하여 HTML로 출력[cite: 1]
+    st.markdown(stock_html, unsafe_allow_html=True) 
 
-    # 데이터 요약 계산
+    # 요약 정보 계산[cite: 1]
     total_eval, total_buy_sum, result_list = 0, 0, []
     for name in active_stocks:
         d = portfolio[name]
@@ -175,7 +176,7 @@ if active_stocks:
     save_data(db)
 
     # =========================================================
-    # 3️⃣ 계좌 변동 및 주요 지표 (가로 카드 레이아웃 적용)
+    # 3️⃣ 계좌 변동 및 주요 요약 (카드 레이아웃 렌더링)[cite: 1]
     # =========================================================
     def get_change(days):
         target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
@@ -191,10 +192,8 @@ if active_stocks:
     t_profit_amt = total_eval - total_buy_sum
     t_profit_rate = (t_profit_amt / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
-    # 주요 지표를 카드 형태로 구성 (모바일 가로 배열 강제)
     metrics_html = '<div class="card-container">'
-    
-    # 1. 변동현황 3개
+    # 계좌 변동 3개 항목
     for label, val, rate in [("전일대비", d_val, d_rate), ("전주대비", w_val, w_rate), ("전월대비", m_val, m_rate)]:
         cls = "up" if val >= 0 else "down"
         metrics_html += f"""
@@ -204,20 +203,14 @@ if active_stocks:
             <div class="card-delta {cls}">{rate:+.2f}%</div>
         </div>
         """
-    
-    # 2. 계좌 요약 4개
+    # 계좌 요약 4개 항목
     summary_items = [
         ("💰 예수금", total_cash), ("📥 총매수액", total_buy_sum),
         ("🏦 총자산", total_asset), ("📊 총수익률", t_profit_rate)
     ]
     for label, val in summary_items:
-        if "수익률" in label:
-            cls = "up" if val >= 0 else "down"
-            display_val = f"{val:+.2f}%"
-        else:
-            cls = ""
-            display_val = f"{int(val):,}"
-        
+        cls = ("up" if val >= 0 else "down") if "수익률" in label else ""
+        display_val = f"{val:+.2f}%" if "수익률" in label else f"{int(val):,}"
         metrics_html += f"""
         <div class="custom-card">
             <div class="card-label">{label}</div>
@@ -225,10 +218,11 @@ if active_stocks:
         </div>
         """
     metrics_html += '</div>'
-    st.markdown(metrics_html, unsafe_allow_html=True)
+    # 핵심 수정: unsafe_allow_html=True를 사용하여 HTML로 출력[cite: 1]
+    st.markdown(metrics_html, unsafe_allow_html=True) 
 
     # =========================================================
-    # 4️⃣ 보유 종목 현황 표
+    # 4️⃣ 보유 종목 리스트 (테이블)[cite: 1]
     # =========================================================
     st.divider()
     st.subheader("📋 보유 종목 리스트")
