@@ -6,28 +6,19 @@ import json
 import datetime
 import re
 
-# 💾 1. 데이터 관리
+# 💾 1. 데이터 로드 (예수금 설정값 관리)
 DATA_FILE = "portfolio_data.json"
-
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding='utf-8') as f:
-                data = json.load(f)
-                if "cash" not in data: data["cash"] = {}
-                return data
+                return json.load(f)
         except: return {"cash": {}}
     return {"cash": {}}
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+db = load_data()
 
-if 'db' not in st.session_state:
-    st.session_state.db = load_data()
-db = st.session_state.db
-
-# 💹 2. 실시간 시세 엔진 (상단 카드용)
+# 💹 2. 실시간 시세 엔진
 @st.cache_data(ttl=5)
 def get_live_price(code):
     if not code or pd.isna(code): return 0
@@ -47,7 +38,7 @@ st.markdown("""
     .card-container { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; margin-bottom: 15px; }
     .custom-card {
         background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px;
-        padding: 10px; min-width: 100px; flex: 1 1 calc(23% - 8px);
+        padding: 10px; min-width: 110px; flex: 1 1 calc(30% - 8px);
         box-shadow: 1px 1px 3px rgba(0,0,0,0.05); text-align: center;
     }
     .card-label { font-size: 0.75rem; color: #6c757d; margin-bottom: 4px; }
@@ -58,111 +49,116 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 📂 4. 구글 시트 데이터 로드
+# 📂 4. 데이터 소스 (구글 시트)
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
-HISTORY_GID = "144293082" # 히스토리 탭 GID
+HISTORY_GID = "144293082" 
 
 @st.cache_data(ttl=10)
 def load_sheet_data(gid):
     try: return pd.read_csv(f"{SHEET_BASE}&gid={gid}", dtype=str).fillna('')
     except: return pd.DataFrame()
 
-def parse_date_flexible(s):
+def parse_date_korea(s):
     try:
         s = re.sub(r'[^0-9\.]', '', str(s)).strip('.')
-        parts = s.split('.')
-        return datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+        p = s.split('.')
+        return datetime.date(int(p[0]), int(p[1]), int(p[2]))
     except: return None
 
-# 🔐 데이터 처리
-st.sidebar.title("🔐 계좌 설정")
+# 🔐 데이터 통합 처리
 selected_account = st.sidebar.selectbox("대상 계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
-
-portfolio = {}
-total_cash = 0
+portfolio, total_cash = {}, 0
 
 for name, gid in TAB_INFO.items():
     if selected_account != "전체 계좌" and selected_account != name: continue
     df_acc = load_sheet_data(gid)
     if df_acc.empty: continue
     for _, row in df_acc.iterrows():
-        item_name = str(row.iloc[1]).strip()
-        if not item_name or item_name in ["종목", "nan"]: continue
-        if "예수금" in item_name:
-            total_cash += pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
+        item = str(row.iloc[1]).strip()
+        if not item or item in ["종목", "nan"]: continue
+        val = pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
+        if "예수금" in item:
+            total_cash += val
             continue
         qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
-        price = pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
         code = str(row.iloc[5]).strip()
-        if item_name not in portfolio: portfolio[item_name] = {"qty": qty, "buy_amt": qty * price, "code": code}
+        if item not in portfolio: portfolio[item] = {"qty": qty, "buy_amt": qty * val, "code": code}
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
-
-# 1️⃣ 화면 출력
 st.title(f"📊 {selected_account}")
 
-# 2️⃣ 상단 실시간 현재가 카드 (복구됨)
-if active_stocks:
-    st.subheader("💹 실시간 종목 시세")
-    price_dict = {n: get_live_price(portfolio[n]["code"]) for n in active_stocks}
-    stock_html = '<div class="card-container">'
-    for name in active_stocks:
-        stock_html += f'<div class="custom-card"><div class="card-label">{name}</div><div class="card-value">{price_dict[name]:,}</div></div>'
-    st.markdown(stock_html + '</div>', unsafe_allow_html=True)
-
-# 3️⃣ 계좌 변동 요약 (시트 데이터 기반 정확한 계산)
-st.divider()
+# 📈 5. 계좌 변동 및 요약 (상단 섹션)
 st.subheader("📈 계좌 변동 및 요약")
+df_h = load_sheet_data(HISTORY_GID)
 
-df_history = load_sheet_data(HISTORY_GID)
-
-def get_comparison_from_sheet(days):
-    if df_history.empty: return 0, 0.0
-    h = df_history.copy()
-    h['dt'] = h.iloc[:, 0].apply(parse_date_flexible)
+def get_sheet_val(days):
+    if df_h.empty: return 0, 0, 0
+    h = df_h.copy()
+    h['dt'] = h.iloc[:, 0].apply(parse_date_korea)
     h = h.dropna(subset=['dt']).sort_values('dt', ascending=False)
     
-    # 5월 6일(오늘)과 5월 5일(어제) 데이터를 시트에서 직접 가져옴
-    today_rec = h[h['dt'] == datetime.date(2026, 5, 6)]
+    # 오늘(5/6)과 비교 대상 날짜 추출
+    today_row = h[h['dt'] == datetime.date(2026, 5, 6)]
     past_date = datetime.date(2026, 5, 6) - datetime.timedelta(days=days)
-    past_rec = h[h['dt'] <= past_date].head(1)
+    past_row = h[h['dt'] <= past_date].head(1)
     
-    if today_rec.empty or past_rec.empty: return 0, 0.0
+    if today_row.empty or past_row.empty: return 0, 0, 0
     
-    def get_val(row):
+    def calc(row):
         if selected_account == "전체 계좌":
             return (pd.to_numeric(str(row.iloc[0, 1]).replace(',', ''), errors='coerce') or 0) + \
                    (pd.to_numeric(str(row.iloc[0, 2]).replace(',', ''), errors='coerce') or 0)
         col = 1 if selected_account == "기본 계좌" else 2
         return pd.to_numeric(str(row.iloc[0, col]).replace(',', ''), errors='coerce') or 0
 
-    curr_val = get_val(today_rec)
-    prev_val = get_val(past_rec)
-    diff = curr_val - prev_val
-    return diff, (diff / prev_val * 100) if prev_val != 0 else 0
+    c_val, p_val = calc(today_row), calc(past_row)
+    diff = c_val - p_val
+    return diff, (diff/p_val*100) if p_val != 0 else 0, c_val
 
-metrics_html = '<div class="card-container">'
-for label, d in [("전일대비", 1), ("전주대비", 7), ("전월대비", 30)]:
-    v, r = get_comparison_from_sheet(d)
+# 상단 카드 계산 (전일 기준)
+d_diff, d_rate, current_total = get_sheet_val(1)
+w_diff, w_rate, _ = get_sheet_val(7)
+m_diff, m_rate, _ = get_sheet_val(30)
+
+# 실시간 데이터 계산 (리스트용)
+price_dict = {n: get_live_price(portfolio[n]["code"]) for n in active_stocks}
+total_eval = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks)
+total_buy = sum(portfolio[n]["buy_amt"] for n in active_stocks)
+real_total_asset = total_cash + total_eval
+total_profit = total_eval - total_buy
+total_profit_rate = (total_profit / total_buy * 100) if total_buy > 0 else 0
+
+# HTML 출력
+m_html = '<div class="card-container">'
+# 첫 번째 줄: 변동 현황
+for l, v, r in [("전일대비", d_diff, d_rate), ("전주대비", w_diff, w_rate), ("전월대비", m_diff, m_rate)]:
     cls = "up" if v > 0 else "down" if v < 0 else ""
-    metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
-st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
+    m_html += f'<div class="custom-card"><div class="card-label">{l}</div><div class="card-value">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
+# 두 번째 줄: 총괄 요약
+p_cls = "up" if total_profit > 0 else "down" if total_profit < 0 else ""
+m_html += f'<div class="custom-card"><div class="card-label">💰 총수익</div><div class="card-value {p_cls}">{int(total_profit):+,}</div></div>'
+m_html += f'<div class="custom-card"><div class="card-label">🏦 총잔고(시트)</div><div class="card-value">{int(current_total):,}</div></div>'
+m_html += f'<div class="custom-card"><div class="card-label">📈 수익률</div><div class="card-value {p_cls}">{total_profit_rate:+.2f}%</div></div>'
+st.markdown(m_html + '</div>', unsafe_allow_html=True)
 
-# 4️⃣ 상세 리스트
+# 📋 6. 보유 종목 리스트
 st.divider()
 st.subheader("📋 보유 종목 리스트")
-if active_stocks:
-    res = []
-    total_eval_sum = 0
-    for n in active_stocks:
-        cp = price_dict[n]
-        ba = portfolio[n]["buy_amt"] / portfolio[n]["qty"]
-        ev = portfolio[n]["qty"] * cp
-        total_eval_sum += ev
-        res.append([n, portfolio[n]["qty"], int(ba), cp, int(ev), ((cp-ba)/ba*100)])
-    
-    df_res = pd.DataFrame(res, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률"])
-    st.dataframe(df_res.style.format({"수량":"{:,.0f}","평단":"{:,.0f}","현재가":"{:,.0f}","평가액":"{:,.0f}","수익률":"{:+.2f}%"}), use_container_width=True, hide_index=True)
-else:
-    st.info("보유 종목이 없습니다.")
+res = []
+for n in active_stocks:
+    cp, ba = price_dict[n], portfolio[n]["buy_amt"] / portfolio[n]["qty"]
+    ev = portfolio[n]["qty"] * cp
+    res.append([n, portfolio[n]["qty"], int(ba), cp, int(ev), ((cp-ba)/ba*100), (ev/real_total_asset*100)])
+
+# 🔥 예수금 행 추가 (요청사항 반영)
+res.append(["💰 예수금", None, None, None, int(total_cash), None, (total_cash/real_total_asset*100)])
+
+df_res = pd.DataFrame(res, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+st.dataframe(df_res.style.format({
+    "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+    "평가액": "{:,.0f}", "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-", "비중(%)": "{:.1f}%"
+}).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']), 
+use_container_width=True, hide_index=True)
