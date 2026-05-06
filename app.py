@@ -37,10 +37,10 @@ def get_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📂 3. 데이터 로드 설정 (GID 확인 필수)
+# 📂 3. 데이터 로드 설정
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
-HISTORY_GID = "144293082" # ← 실제 히스토리 탭 GID로 수정하세요.
+HISTORY_GID = "144293082"  # 사용자가 제공한 GID 적용
 
 @st.cache_data(ttl=10)
 def load_sheet_data(gid):
@@ -49,7 +49,6 @@ def load_sheet_data(gid):
         return df.fillna('')
     except: return pd.DataFrame()
 
-# 날짜 파싱 유틸리티 (마침표 대응)
 def parse_date_flexible(s):
     try:
         s = re.sub(r'[^0-9\.]', '', str(s)).strip('.')
@@ -59,16 +58,13 @@ def parse_date_flexible(s):
         return pd.to_datetime(s).date()
     except: return None
 
-# 🔐 계좌 선택 및 데이터 통합
+# 🔐 데이터 통합 처리
 selected_account = st.sidebar.selectbox("대상 계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
-
 portfolio, total_cash = {}, 0
 df_history = load_sheet_data(HISTORY_GID)
 
-# 개별 탭 처리
 for name, gid in TAB_INFO.items():
     if selected_account != "전체 계좌" and selected_account != name: continue
-    
     df_acc = load_sheet_data(gid)
     if df_acc.empty: continue
     
@@ -83,7 +79,7 @@ for name, gid in TAB_INFO.items():
         if "예수금" in item_name:
             tab_cash = price
             continue
-        if not item_name or item_name == "종목": continue
+        if not item_name or item_name in ["종목", "nan"]: continue
 
         if item_name not in portfolio: portfolio[item_name] = {"qty": 0, "buy_amt": 0, "code": code}
         if action == "매수":
@@ -97,7 +93,7 @@ for name, gid in TAB_INFO.items():
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
-# 4️⃣ 메인 화면
+# 4️⃣ 메인 화면 출력
 st.title(f"📊 {selected_account}")
 
 if active_stocks or total_cash > 0:
@@ -106,30 +102,23 @@ if active_stocks or total_cash > 0:
     total_buy_sum = sum(portfolio[n]["buy_amt"] for n in active_stocks)
     total_asset = total_cash + total_eval
 
-    # 📈 계좌 변동 계산 (강화된 로직)
+    # --- 📈 계좌 변동 요약 섹션 ---
     st.divider()
     st.subheader("📈 계좌 변동 및 요약")
     
     def get_comparison(days):
         if df_history.empty: return 0, 0.0
-        
-        # 히스토리 날짜 파싱 및 정렬
         h = df_history.copy()
         h['dt'] = h.iloc[:, 0].apply(parse_date_flexible)
         h = h.dropna(subset=['dt']).sort_values('dt', ascending=False)
-        
-        today = datetime.date.today()
-        target_dt = today - datetime.timedelta(days=days)
-        
-        # 오늘보다 과거인 데이터 중 가장 최신 것 선택
+        target_dt = datetime.date.today() - datetime.timedelta(days=days)
         past = h[h['dt'] <= target_dt]
         if past.empty: return 0, 0.0
         
         row = past.iloc[0]
         if selected_account == "전체 계좌":
-            v_b = pd.to_numeric(str(row.iloc[1]).replace(',', ''), errors='coerce') or 0
-            v_h = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
-            past_val = v_b + v_h
+            past_val = (pd.to_numeric(str(row.iloc[1]).replace(',', ''), errors='coerce') or 0) + \
+                       (pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0)
         elif selected_account == "기본 계좌":
             past_val = pd.to_numeric(str(row.iloc[1]).replace(',', ''), errors='coerce') or 0
         else:
@@ -151,4 +140,30 @@ if active_stocks or total_cash > 0:
         metrics_html += f'<div class="custom-card"><div class="card-label">{l}</div><div class="card-value">{int(v):,}</div><div class="card-delta {cls}">{rs}</div></div>'
     st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
 
-    # 📋 보유 종목 리스트 (필요시 추가)
+    # --- 📋 보유 종목 리스트 섹션 ---
+    st.divider()
+    st.subheader("📋 보유 종목 리스트")
+    
+    res = []
+    for n in active_stocks:
+        buy_avg = portfolio[n]["buy_amt"] / portfolio[n]["qty"]
+        current_p = price_dict.get(n, 0)
+        eval_amt = portfolio[n]["qty"] * current_p
+        profit_rate = ((current_p - buy_avg) / buy_avg * 100) if buy_avg > 0 else 0
+        weight = (eval_amt / total_asset * 100)
+        res.append([n, portfolio[n]["qty"], int(buy_avg), current_p, int(eval_amt), profit_rate, weight])
+    
+    res.append(["💰 예수금", None, None, None, int(total_cash), None, (total_cash / total_asset * 100)])
+    
+    df_res = pd.DataFrame(res, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+    st.dataframe(df_res.style.format({
+        "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+        "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+        "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
+        "평가액": "{:,.0f}",
+        "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-",
+        "비중(%)": "{:.1f}%"
+    }).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']), 
+    use_container_width=True, hide_index=True)
+else:
+    st.info("데이터를 불러오는 중이거나 표시할 종목이 없습니다.")
