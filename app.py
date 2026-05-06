@@ -40,7 +40,7 @@ def get_live_price(code):
 # 📂 3. 데이터 로드 설정 (GID 확인 필수)
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
-HISTORY_GID = "여기에_히스토리_탭_GID_입력" # ← 실제 히스토리 탭 GID로 수정하세요.
+HISTORY_GID = "144293082" # ← 실제 히스토리 탭 GID로 수정하세요.
 
 @st.cache_data(ttl=10)
 def load_sheet_data(gid):
@@ -59,7 +59,7 @@ def parse_date_flexible(s):
         return pd.to_datetime(s).date()
     except: return None
 
-# 🔐 계좌 선택 및 데이터 로합
+# 🔐 계좌 선택 및 데이터 통합
 selected_account = st.sidebar.selectbox("대상 계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
 portfolio, total_cash = {}, 0
@@ -81,7 +81,7 @@ for name, gid in TAB_INFO.items():
         action = str(row.iloc[4]).strip()
 
         if "예수금" in item_name:
-            tab_cash = price # 마지막 예수금 행의 값을 취함
+            tab_cash = price
             continue
         if not item_name or item_name == "종목": continue
 
@@ -151,12 +151,4 @@ if active_stocks or total_cash > 0:
         metrics_html += f'<div class="custom-card"><div class="card-label">{l}</div><div class="card-value">{int(v):,}</div><div class="card-delta {cls}">{rs}</div></div>'
     st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
 
-    # 📋 보유 종목 리스트
-    st.divider()
-    st.subheader("📋 보유 종목 리스트")
-    res = [[n, portfolio[n]["qty"], int(portfolio[n]["buy_amt"]/portfolio[n]["qty"]), price_dict[n], portfolio[n]["qty"]*price_dict[n], round((price_dict[n]-(portfolio[n]["buy_amt"]/portfolio[n]["qty"]))/(portfolio[n]["buy_amt"]/portfolio[n]["qty"])*100,2), round((portfolio[n]["qty"]*price_dict[n])/total_asset*100,1)] for n in active_stocks]
-    res.append(["💰 예수금", None, None, None, int(total_cash), None, round(total_cash/total_asset*100, 1)])
-    st.dataframe(pd.DataFrame(res, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"]).style.format({
-        "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-", "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-        "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-", "평가액": "{:,.0f}", "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-", "비중(%)": "{:.1f}%"
-    }).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']), use_container_width=True, hide_index=True)
+    # 📋 보유 종목 리스트 (필요시 추가)
