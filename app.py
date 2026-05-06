@@ -4,10 +4,9 @@ import requests
 import datetime
 import re
 
-# 📱 1. 화면 설정 및 스타일 (최상단 배치)
+# 📱 1. 화면 설정 및 스타일
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
 
-# CSS 레이아웃 정의
 st.markdown("""
 <style>
     h1 { font-size: 1.5rem !important; }
@@ -47,11 +46,10 @@ def load_sheet_data(gid):
     try: return pd.read_csv(f"{SHEET_BASE}&gid={gid}", dtype=str)
     except: return pd.DataFrame()
 
-# 🔐 사이드바 설정 (기존 메뉴 유지)
+# 🔐 사이드바 설정
 st.sidebar.title("🔐 계좌 설정")
 selected_account = st.sidebar.selectbox("대상 계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
-# 데이터 통합 및 처리
 all_dfs = []
 if selected_account == "전체 계좌":
     for gid in TAB_INFO.values():
@@ -61,14 +59,13 @@ else:
 
 df_raw = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
 
-# 포트폴리오, 예수금, 히스토리 분리 계산
+# 데이터 처리 변수 초기화
 portfolio = {}
-total_cash = 0
-history_data = {}
+cash_list = [] # 모든 예수금 기록을 담을 리스트
+history_data = {} # {날짜: 총잔고}
 
 if not df_raw.empty:
     for _, row in df_raw.iterrows():
-        # A:날짜, B:종목, C:수량, D:가격, E:구분, F:코드
         date_val = str(row.iloc[0]).strip()
         name = str(row.iloc[1]).strip()
         qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
@@ -78,15 +75,16 @@ if not df_raw.empty:
 
         if not name or name == "nan" or name == "종목": continue
 
-        # [특수 항목 처리]
+        # [수정: 예수금 합산 방지] 예수금이라는 이름이 있으면 리스트에 추가 (나중에 마지막 값만 사용)
         if "예수금" in name:
-            total_cash += price
+            cash_list.append(price)
             continue
+        # [수정: 총잔고 분리] 총잔고 기록은 히스토리 데이터로만 활용
         if "총잔고" in name:
             history_data[date_val] = price
             continue
 
-        # [주식 계산]
+        # [주식 포트폴리오 계산]
         if name not in portfolio: portfolio[name] = {"qty": 0, "total_buy": 0, "code": code}
         if action == "매수":
             portfolio[name]["qty"] += qty
@@ -96,14 +94,16 @@ if not df_raw.empty:
             portfolio[name]["qty"] -= qty
             portfolio[name]["total_buy"] -= avg_p * qty
 
+# 최종 예수금 결정 (리스트의 가장 마지막 값 사용)
+total_cash = cash_list[-1] if cash_list else 0
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # 4️⃣ 메인 화면 출력
 st.title(f"📊 {selected_account}")
 
-price_dict = {}
 if active_stocks or total_cash > 0:
     # 실시간 시세 카드
+    price_dict = {}
     if active_stocks:
         st.subheader("💹 실시간 종목 시세")
         stock_html = '<div class="card-container">'
@@ -128,7 +128,7 @@ if active_stocks or total_cash > 0:
 
     total_asset = total_cash + total_eval
 
-    # 계좌 변동 및 요약
+    # 5️⃣ 계좌 변동 및 요약 (전일대비 등)
     st.divider()
     st.subheader("📈 계좌 변동 및 요약")
     
@@ -137,7 +137,8 @@ if active_stocks or total_cash > 0:
         past_dates = sorted([d for d in history_data.keys() if d <= target_date], reverse=True)
         if not past_dates: return 0, 0.0
         past_val = history_data[past_dates[0]]
-        return (total_asset - past_val), ((total_asset - past_val) / past_val * 100) if past_val != 0 else 0
+        diff = total_asset - past_val
+        return diff, (diff / past_val * 100) if past_val != 0 else 0
 
     d_val, d_rate = get_comparison(1)
     w_val, w_rate = get_comparison(7)
@@ -157,7 +158,7 @@ if active_stocks or total_cash > 0:
     metrics_html += '</div>'
     st.markdown(metrics_html, unsafe_allow_html=True)
 
-    # 보유 종목 리스트
+    # 6️⃣ 보유 종목 리스트
     st.divider()
     st.subheader("📋 보유 종목 리스트")
     final_data = [[r[0], r[1], r[2], r[3], r[4], r[5], round(r[4]/total_asset*100, 1)] for r in result_list]
@@ -177,4 +178,4 @@ if active_stocks or total_cash > 0:
     }).map(style_profit, subset=['수익률']), use_container_width=True, hide_index=True)
 
 else:
-    st.info("보유 종목이 없거나 시트에 '예수금' 데이터가 없습니다.")
+    st.info("시트에 데이터를 입력해주세요. (주식 종목 혹은 '예수금' 항목)")
