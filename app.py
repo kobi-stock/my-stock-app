@@ -6,7 +6,7 @@ import json
 import datetime
 import re
 
-# 💾 1. 데이터 및 스타일 설정
+# 💾 1. 화면 및 스타일 설정
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
 st.markdown("""
 <style>
@@ -36,7 +36,7 @@ def get_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📂 3. 데이터 로드 및 전처리
+# 📂 3. 데이터 로드 및 매수/매도 정밀 계산 (핵심 수정)
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 HISTORY_GID = "144293082"
@@ -49,7 +49,6 @@ def load_data(gid):
 selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 portfolio, total_cash = {}, 0
 
-# 시트에서 데이터 읽기 (수량 및 평단가 오차 방지)
 for name, gid in TAB_INFO.items():
     if selected_account != "전체 계좌" and selected_account != name: continue
     df_acc = load_data(gid)
@@ -63,17 +62,27 @@ for name, gid in TAB_INFO.items():
             continue
             
         qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
+        action = str(row.iloc[4]).strip() # 매수/매도 구분
         code = str(row.iloc[5]).strip() if len(row) > 5 else ""
+        
         if item not in portfolio:
-            portfolio[item] = {"qty": qty, "buy_amt": qty * val, "code": code}
-        else: # 동일 종목 합산 로직
+            portfolio[item] = {"qty": 0, "total_buy_amt": 0, "code": code}
+        
+        # 매수/매도 로직 적용
+        if action == "매수":
             portfolio[item]["qty"] += qty
-            portfolio[item]["buy_amt"] += (qty * val)
+            portfolio[item]["total_buy_amt"] += (qty * val)
+        elif action == "매도":
+            if portfolio[item]["qty"] > 0:
+                # 매도 시에는 기존 평단가 기준으로 매수총액에서 차감
+                avg_p = portfolio[item]["total_buy_amt"] / portfolio[item]["qty"]
+                portfolio[item]["qty"] -= qty
+                portfolio[item]["total_buy_amt"] -= (qty * avg_p)
 
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 st.title(f"📊 {selected_account}")
 
-# 💹 4. 실시간 시세 카드
+# 💹 4. 실시간 종목 시세 카드
 price_dict = {n: get_live_price(portfolio[n]["code"]) for n in active_stocks}
 if active_stocks:
     st.subheader("💹 실시간 종목 시세")
@@ -82,14 +91,13 @@ if active_stocks:
         stock_html += f'<div class="custom-card"><div class="card-label">{name}</div><div class="card-value">{price_dict[name]:,}</div></div>'
     st.markdown(stock_html + '</div>', unsafe_allow_html=True)
 
-# 📊 5. 자산 계산 및 요약 (오차 해결 핵심)
+# 📊 5. 자산 계산 및 요약 (전주, 전월 대비 복구)
 total_eval = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks)
-total_buy = sum(portfolio[n]["buy_amt"] for n in active_stocks)
-current_total_asset = total_cash + total_eval # 실시간 합산 총자산
+total_buy = sum(portfolio[n]["total_buy_amt"] for n in active_stocks)
+current_total_asset = total_cash + total_eval 
 total_profit = total_eval - total_buy
 total_profit_rate = (total_profit / total_buy * 100) if total_buy > 0 else 0
 
-# 📈 6. 계좌 변동 (전주, 전월 탭 복구)
 st.divider()
 st.subheader("📈 계좌 변동 및 요약")
 df_h = load_data(HISTORY_GID)
@@ -98,22 +106,20 @@ def get_comparison(days):
     if df_h.empty: return 0, 0
     h = df_h.copy()
     h.iloc[:, 0] = h.iloc[:, 0].apply(lambda x: re.sub(r'[^0-9\.]', '', str(x)).strip('.'))
-    
     today_val = datetime.date(2026, 5, 6)
     target_date = today_val - datetime.timedelta(days=days)
     
-    # 날짜별 데이터 찾기
-    def get_val_by_offset(d):
-        target_str = d.strftime("%Y.%m.%d")
-        row = h[h.iloc[:, 0].str.contains(target_str, na=False)].head(1)
-        if row.empty: return 0
-        if selected_account == "전체 계좌":
-            return (pd.to_numeric(str(row.iloc[0, 1]).replace(',', ''), errors='coerce') or 0) + \
+    target_str = target_date.strftime("%Y.%m.%d")
+    row = h[h.iloc[:, 0].str.contains(target_str, na=False)].head(1)
+    if row.empty: return 0, 0
+    
+    if selected_account == "전체 계좌":
+        past_val = (pd.to_numeric(str(row.iloc[0, 1]).replace(',', ''), errors='coerce') or 0) + \
                    (pd.to_numeric(str(row.iloc[0, 2]).replace(',', ''), errors='coerce') or 0)
+    else:
         col = 1 if selected_account == "기본 계좌" else 2
-        return pd.to_numeric(str(row.iloc[0, col]).replace(',', ''), errors='coerce') or 0
-
-    past_val = get_val_by_offset(target_date)
+        past_val = pd.to_numeric(str(row.iloc[0, col]).replace(',', ''), errors='coerce') or 0
+        
     if past_val == 0: return 0, 0
     diff = current_total_asset - past_val
     return diff, (diff/past_val*100)
@@ -124,21 +130,22 @@ for label, days in [("전일대비", 1), ("전주대비", 7), ("전월대비", 3
     cls = "up" if v > 0 else "down" if v < 0 else ""
     metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
 
-# 요약 카드 (총수익, 총잔고, 수익률)
 p_cls = "up" if total_profit > 0 else "down" if total_profit < 0 else ""
 metrics_html += f'<div class="custom-card"><div class="card-label">💰 총수익</div><div class="card-value {p_cls}">{int(total_profit):+,}</div></div>'
 metrics_html += f'<div class="custom-card"><div class="card-label">🏦 총잔고</div><div class="card-value">{int(current_total_asset):,}</div></div>'
 metrics_html += f'<div class="custom-card"><div class="card-label">📈 수익률</div><div class="card-value {p_cls}">{total_profit_rate:+.2f}%</div></div>'
 st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
 
-# 📋 7. 보유 종목 리스트
+# 📋 6. 보유 종목 리스트
 st.divider()
 st.subheader("📋 보유 종목 리스트")
 res = []
 for n in active_stocks:
-    cp, ba = price_dict[n], portfolio[n]["buy_amt"] / portfolio[n]["qty"]
-    ev = portfolio[n]["qty"] * cp
-    res.append([n, portfolio[n]["qty"], int(ba), cp, int(ev), ((cp-ba)/ba*100), (ev/current_total_asset*100)])
+    cp = price_dict[n]
+    qty = portfolio[n]["qty"]
+    ba = portfolio[n]["total_buy_amt"] / qty
+    ev = qty * cp
+    res.append([n, qty, int(ba), cp, int(ev), ((cp-ba)/ba*100), (ev/current_total_asset*100)])
 res.append(["💰 예수금", None, None, None, int(total_cash), None, (total_cash/current_total_asset*100)])
 
 df_res = pd.DataFrame(res, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
