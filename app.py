@@ -2,11 +2,10 @@ import pandas as pd
 import streamlit as st
 import requests
 import os
-import json
 import datetime
 import re
 
-# 💾 1. 화면 및 스타일 설정
+# 💾 1. 화면 설정
 st.set_page_config(page_title="주식 포트폴리오", layout="centered")
 st.markdown("""
 <style>
@@ -36,7 +35,7 @@ def get_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📂 3. 데이터 로드 및 수익률 정밀 계산 (핵심 수정)
+# 📂 3. 데이터 로드 및 정밀 계산
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 HISTORY_GID = "144293082"
@@ -68,13 +67,12 @@ for name, gid in TAB_INFO.items():
         if item not in portfolio:
             portfolio[item] = {"qty": 0, "total_buy_cost": 0, "code": code}
         
-        # 선입선출법 혹은 평균단가법을 고려한 원가 관리
         if action == "매수":
             portfolio[item]["qty"] += qty
             portfolio[item]["total_buy_cost"] += (qty * val)
         elif action == "매도":
             if portfolio[item]["qty"] > 0:
-                # 현재 보유 원가에서 매도한 비율만큼 원가를 차감하여 '수익금' 왜곡 방지
+                # 매도 시 평단가 기준으로 매수 원가를 차감하여 '보유 종목 원가'만 남김
                 unit_cost = portfolio[item]["total_buy_cost"] / portfolio[item]["qty"]
                 portfolio[item]["qty"] -= qty
                 portfolio[item]["total_buy_cost"] -= (qty * unit_cost)
@@ -82,24 +80,20 @@ for name, gid in TAB_INFO.items():
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 st.title(f"📊 {selected_account}")
 
-# 💹 4. 실시간 종목 시세 카드
+# 💹 4. 실시간 시세 및 자산 계산
 price_dict = {n: get_live_price(portfolio[n]["code"]) for n in active_stocks}
-if active_stocks:
-    st.subheader("💹 실시간 종목 시세")
-    stock_html = '<div class="card-container">'
-    for name in active_stocks:
-        stock_html += f'<div class="custom-card"><div class="card-label">{name}</div><div class="card-value">{price_dict[name]:,}</div></div>'
-    st.markdown(stock_html + '</div>', unsafe_allow_html=True)
 
-# 📊 5. 총수익 및 자산 요약 (실시간 계산 고정)
-total_eval_amt = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks)
-total_buy_cost_sum = sum(portfolio[n]["total_buy_cost"] for n in active_stocks)
-current_total_asset = total_cash + total_eval_amt 
+# 핵심 계산 공식
+total_eval_amt = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks) # 총평가액
+total_buy_cost_sum = sum(portfolio[n]["total_buy_cost"] for n in active_stocks) # 총매수액(원가)
+current_total_asset = total_cash + total_eval_amt # 총잔고 (예수금 + 평가액)
 
-# 총수익 = 실시간 평가액 합계 - 남은 수량의 매수 원가 합계
+# 총수익 = 총잔고 - (매수원가 + 예수금) 이 아니라, 
+# 현재 보유 종목에서 발생하는 실시간 수익으로 정의하여 항등식 유지
 total_profit_val = total_eval_amt - total_buy_cost_sum
 total_profit_pct = (total_profit_val / total_buy_cost_sum * 100) if total_buy_cost_sum > 0 else 0
 
+# 📈 5. 계좌 변동 요약 (전일/전주/전월 복구)
 st.divider()
 st.subheader("📈 계좌 변동 및 요약")
 df_h = load_data(HISTORY_GID)
@@ -108,19 +102,20 @@ def get_comparison(days):
     if df_h.empty: return 0, 0
     h = df_h.copy()
     h.iloc[:, 0] = h.iloc[:, 0].apply(lambda x: re.sub(r'[^0-9\.]', '', str(x)).strip('.'))
+    # 시스템 기준 오늘 날짜 (2026.05.06) 사용
     today_val = datetime.date(2026, 5, 6)
     target_date = today_val - datetime.timedelta(days=days)
-    
     target_str = target_date.strftime("%Y.%m.%d")
+    
     row = h[h.iloc[:, 0].str.contains(target_str, na=False)].head(1)
     if row.empty: return 0, 0
     
     if selected_account == "전체 계좌":
-        past_val = (pd.to_numeric(str(row.iloc[0, 1]).replace(',', ''), errors='coerce') or 0) + \
-                   (pd.to_numeric(str(row.iloc[0, 2]).replace(',', ''), errors='coerce') or 0)
+        past_val = (pd.to_numeric(str(row.iloc[1]).replace(',', ''), errors='coerce') or 0) + \
+                   (pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0)
     else:
         col = 1 if selected_account == "기본 계좌" else 2
-        past_val = pd.to_numeric(str(row.iloc[0, col]).replace(',', ''), errors='coerce') or 0
+        past_val = pd.to_numeric(str(row.iloc[col]).replace(',', ''), errors='coerce') or 0
         
     if past_val == 0: return 0, 0
     diff = current_total_asset - past_val
@@ -132,11 +127,10 @@ for label, days in [("전일대비", 1), ("전주대비", 7), ("전월대비", 3
     cls = "up" if v > 0 else "down" if v < 0 else ""
     metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
 
-# 수익금 및 수익률 강조 표시[cite: 2]
 p_cls = "up" if total_profit_val > 0 else "down" if total_profit_val < 0 else ""
+metrics_html += f'<div class="custom-card"><div class="card-label">📥 총매수액</div><div class="card-value">{int(total_buy_cost_sum):,}</div></div>'
 metrics_html += f'<div class="custom-card"><div class="card-label">💰 총수익</div><div class="card-value {p_cls}">{int(total_profit_val):+,}</div></div>'
 metrics_html += f'<div class="custom-card"><div class="card-label">🏦 총잔고</div><div class="card-value">{int(current_total_asset):,}</div></div>'
-metrics_html += f'<div class="custom-card"><div class="card-label">📈 수익률</div><div class="card-value {p_cls}">{total_profit_pct:+.2f}%</div></div>'
 st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
 
 # 📋 6. 보유 종목 리스트
