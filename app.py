@@ -29,7 +29,7 @@ st.markdown("""
 # 💹 2. 실시간 시세 엔진
 @st.cache_data(ttl=5)
 def get_live_price(code):
-    if not code or pd.isna(code) or str(code).strip() == "" or code == "None": return 0
+    if not code or pd.isna(code) or str(code).strip() in ["", "None", "nan"]: return 0
     clean_code = re.sub(r'[^0-9]', '', str(code)).zfill(6)
     try:
         url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{clean_code}"
@@ -40,7 +40,7 @@ def get_live_price(code):
 # 📂 3. 데이터 로드 설정
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
-HISTORY_GID = "144293082"  # 사용자가 제공한 GID 적용
+HISTORY_GID = "144293082" 
 
 @st.cache_data(ttl=10)
 def load_sheet_data(gid):
@@ -70,8 +70,11 @@ for name, gid in TAB_INFO.items():
     
     tab_cash = 0
     for _, row in df_acc.iterrows():
+        # 데이터가 비어있는 행 건너뛰기
+        if len(row) < 5 or str(row.iloc[1]).strip() == "": continue
+        
         item_name = str(row.iloc[1]).strip()
-        code = str(row.iloc[5]).strip()
+        code = str(row.iloc[5]).strip() if len(row) > 5 else ""
         qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
         price = pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
         action = str(row.iloc[4]).strip()
@@ -79,7 +82,9 @@ for name, gid in TAB_INFO.items():
         if "예수금" in item_name:
             tab_cash = price
             continue
-        if not item_name or item_name in ["종목", "nan"]: continue
+        
+        # '종목' 헤더나 불필요한 텍스트 제외
+        if item_name in ["종목", "nan", "None"]: continue
 
         if item_name not in portfolio: portfolio[item_name] = {"qty": 0, "buy_amt": 0, "code": code}
         if action == "매수":
@@ -89,8 +94,10 @@ for name, gid in TAB_INFO.items():
             avg_p = portfolio[item_name]["buy_amt"] / portfolio[item_name]["qty"]
             portfolio[item_name]["qty"] -= qty
             portfolio[item_name]["buy_amt"] -= avg_p * qty
+            
     total_cash += tab_cash
 
+# 수량이 0보다 큰 종목만 추출
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # 4️⃣ 메인 화면 출력
@@ -102,7 +109,7 @@ if active_stocks or total_cash > 0:
     total_buy_sum = sum(portfolio[n]["buy_amt"] for n in active_stocks)
     total_asset = total_cash + total_eval
 
-    # --- 📈 계좌 변동 요약 섹션 ---
+    # --- 📈 계좌 변동 요약 ---
     st.divider()
     st.subheader("📈 계좌 변동 및 요약")
     
@@ -140,22 +147,26 @@ if active_stocks or total_cash > 0:
         metrics_html += f'<div class="custom-card"><div class="card-label">{l}</div><div class="card-value">{int(v):,}</div><div class="card-delta {cls}">{rs}</div></div>'
     st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
 
-    # --- 📋 보유 종목 리스트 섹션 ---
+    # --- 📋 보유 종목 리스트 (필터링 강화) ---
     st.divider()
     st.subheader("📋 보유 종목 리스트")
     
     res = []
     for n in active_stocks:
-        buy_avg = portfolio[n]["buy_amt"] / portfolio[n]["qty"]
+        qty = portfolio[n]["qty"]
+        buy_avg = portfolio[n]["buy_amt"] / qty
         current_p = price_dict.get(n, 0)
-        eval_amt = portfolio[n]["qty"] * current_p
+        eval_amt = qty * current_p
         profit_rate = ((current_p - buy_avg) / buy_avg * 100) if buy_avg > 0 else 0
         weight = (eval_amt / total_asset * 100)
-        res.append([n, portfolio[n]["qty"], int(buy_avg), current_p, int(eval_amt), profit_rate, weight])
+        res.append([n, qty, int(buy_avg), current_p, int(eval_amt), profit_rate, weight])
     
+    # 예수금 행 추가
     res.append(["💰 예수금", None, None, None, int(total_cash), None, (total_cash / total_asset * 100)])
     
     df_res = pd.DataFrame(res, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+    
+    # 데이터프레임 스타일 적용 및 출력
     st.dataframe(df_res.style.format({
         "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
         "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
@@ -165,5 +176,6 @@ if active_stocks or total_cash > 0:
         "비중(%)": "{:.1f}%"
     }).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']), 
     use_container_width=True, hide_index=True)
+
 else:
-    st.info("데이터를 불러오는 중이거나 표시할 종목이 없습니다.")
+    st.warning("표시할 수 있는 종목 데이터가 없습니다. 시트의 종목명, 수량, 단가가 정확히 입력되었는지 확인해 주세요.")
