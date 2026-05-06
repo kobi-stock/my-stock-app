@@ -37,9 +37,10 @@ def get_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📂 3. 구글 시트 데이터 로드
+# 📂 3. 구글 시트 데이터 로드 설정
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
+HISTORY_GID = "여기에_히스토리_탭_GID_입력" 
 
 @st.cache_data(ttl=10)
 def load_sheet_data(gid):
@@ -50,23 +51,22 @@ def load_sheet_data(gid):
 st.sidebar.title("🔐 계좌 설정")
 selected_account = st.sidebar.selectbox("대상 계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 
+# [데이터 로드]
 all_dfs = []
 if selected_account == "전체 계좌":
-    for gid in TAB_INFO.values():
-        all_dfs.append(load_sheet_data(gid))
+    for gid in TAB_INFO.values(): all_dfs.append(load_sheet_data(gid))
 else:
     all_dfs.append(load_sheet_data(TAB_INFO[selected_account]))
 
 df_raw = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
+df_history = load_sheet_data(HISTORY_GID)
 
-# 데이터 처리 변수 초기화
+# [주식 및 예수금 처리]
 portfolio = {}
-cash_list = [] # 모든 예수금 기록을 담을 리스트
-history_data = {} # {날짜: 총잔고}
+cash_list = []
 
 if not df_raw.empty:
     for _, row in df_raw.iterrows():
-        date_val = str(row.iloc[0]).strip()
         name = str(row.iloc[1]).strip()
         qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
         price = pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
@@ -74,17 +74,10 @@ if not df_raw.empty:
         code = str(row.iloc[5]).strip()
 
         if not name or name == "nan" or name == "종목": continue
-
-        # [수정: 예수금 합산 방지] 예수금이라는 이름이 있으면 리스트에 추가 (나중에 마지막 값만 사용)
         if "예수금" in name:
             cash_list.append(price)
             continue
-        # [수정: 총잔고 분리] 총잔고 기록은 히스토리 데이터로만 활용
-        if "총잔고" in name:
-            history_data[date_val] = price
-            continue
 
-        # [주식 포트폴리오 계산]
         if name not in portfolio: portfolio[name] = {"qty": 0, "total_buy": 0, "code": code}
         if action == "매수":
             portfolio[name]["qty"] += qty
@@ -94,15 +87,13 @@ if not df_raw.empty:
             portfolio[name]["qty"] -= qty
             portfolio[name]["total_buy"] -= avg_p * qty
 
-# 최종 예수금 결정 (리스트의 가장 마지막 값 사용)
-total_cash = cash_list[-1] if cash_list else 0
+total_cash = sum(cash_list) if selected_account == "전체 계좌" else (cash_list[-1] if cash_list else 0)
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 
 # 4️⃣ 메인 화면 출력
 st.title(f"📊 {selected_account}")
 
 if active_stocks or total_cash > 0:
-    # 실시간 시세 카드
     price_dict = {}
     if active_stocks:
         st.subheader("💹 실시간 종목 시세")
@@ -114,68 +105,69 @@ if active_stocks or total_cash > 0:
         stock_html += '</div>'
         st.markdown(stock_html, unsafe_allow_html=True)
 
-    # 자산 데이터 계산
-    total_eval, total_buy_sum, result_list = 0, 0, []
-    for name in active_stocks:
-        d = portfolio[name]
-        curr_p = price_dict.get(name, 0)
-        avg_p = d["total_buy"] / d["qty"]
-        eval_amt = d["qty"] * curr_p
-        total_eval += eval_amt
-        total_buy_sum += d["total_buy"]
-        profit_r = (curr_p - avg_p) / avg_p * 100 if avg_p else 0
-        result_list.append([name, d["qty"], int(avg_p), int(curr_p), int(eval_amt), round(profit_r, 2)])
-
+    total_eval = sum(portfolio[name]["qty"] * price_dict.get(name, 0) for name in active_stocks)
+    total_buy_sum = sum(portfolio[name]["total_buy"] for name in active_stocks)
     total_asset = total_cash + total_eval
 
-    # 5️⃣ 계좌 변동 및 요약 (전일대비 등)
+    # 5️⃣ 계좌 변동 및 요약 (확장된 히스토리 시트 대응)
     st.divider()
     st.subheader("📈 계좌 변동 및 요약")
     
     def get_comparison(days):
+        if df_history.empty: return 0, 0.0
         target_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-        past_dates = sorted([d for d in history_data.keys() if d <= target_date], reverse=True)
-        if not past_dates: return 0, 0.0
-        past_val = history_data[past_dates[0]]
+        past_rows = df_history[df_history.iloc[:, 0] <= target_date].sort_values(by=df_history.columns[0], ascending=False)
+        if past_rows.empty: return 0, 0.0
+        
+        # 선택된 계좌에 따라 열(Column) 선택
+        # B열: 기본계좌, C열: 한투계좌
+        if selected_account == "전체 계좌":
+            val_b = pd.to_numeric(str(past_rows.iloc[0, 1]).replace(',', ''), errors='coerce') or 0
+            val_c = pd.to_numeric(str(past_rows.iloc[0, 2]).replace(',', ''), errors='coerce') or 0
+            past_val = val_b + val_c
+        elif selected_account == "기본 계좌":
+            past_val = pd.to_numeric(str(past_rows.iloc[0, 1]).replace(',', ''), errors='coerce') or 0
+        else: # 한국투자증권
+            past_val = pd.to_numeric(str(past_rows.iloc[0, 2]).replace(',', ''), errors='coerce') or 0
+            
         diff = total_asset - past_val
         return diff, (diff / past_val * 100) if past_val != 0 else 0
 
     d_val, d_rate = get_comparison(1)
     w_val, w_rate = get_comparison(7)
-    m_val, m_rate = get_comparison(30)
     t_profit_amt = total_eval - total_buy_sum
     t_profit_rate = (t_profit_amt / total_buy_sum * 100) if total_buy_sum > 0 else 0
 
     metrics_html = '<div class="card-container">'
-    for label, val, rate in [("전일대비", d_val, d_rate), ("전주대비", w_val, w_rate), ("전월대비", m_val, m_rate)]:
+    for label, val, rate in [("전일대비", d_val, d_rate), ("전주대비", w_val, w_rate)]:
         cls = "up" if val > 0 else "down" if val < 0 else ""
         metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(val):+,}</div><div class="card-delta {cls}">{rate:+.2f}%</div></div>'
     
-    summary = [("💰 예수금", total_cash, ""), ("📥 총매수액", total_buy_sum, ""), ("🏦 총자산", total_asset, ""), ("📊 총수익률", t_profit_amt, f"{t_profit_rate:+.2f}%")]
+    summary = [("💰 예수금", total_cash, ""), ("🏦 총자산", total_asset, ""), ("📊 총수익률", t_profit_amt, f"{t_profit_rate:+.2f}%")]
     for label, val, rate_str in summary:
         cls = "up" if "수익률" in label and val > 0 else "down" if "수익률" in label and val < 0 else ""
         metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(val):,}</div><div class="card-delta {cls}">{rate_str}</div></div>'
     metrics_html += '</div>'
     st.markdown(metrics_html, unsafe_allow_html=True)
 
-    # 6️⃣ 보유 종목 리스트
+    # 6️⃣ 보유 종목 리스트 (스타일 유지)
     st.divider()
     st.subheader("📋 보유 종목 리스트")
-    final_data = [[r[0], r[1], r[2], r[3], r[4], r[5], round(r[4]/total_asset*100, 1)] for r in result_list]
-    final_data.append(["💰 예수금", None, None, None, int(total_cash), None, round(total_cash/total_asset*100, 1)])
-    df_final = pd.DataFrame(final_data, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+    result_list = []
+    for name in active_stocks:
+        d = portfolio[name]
+        curr_p = price_dict.get(name, 0)
+        avg_p = d["total_buy"] / d["qty"]
+        eval_amt = d["qty"] * curr_p
+        profit_r = (curr_p - avg_p) / avg_p * 100 if avg_p else 0
+        result_list.append([name, d["qty"], int(avg_p), int(curr_p), int(eval_amt), round(profit_r, 2), round(eval_amt/total_asset*100, 1)])
     
-    def style_profit(val):
-        if val is None or isinstance(val, str): return ''
-        color = '#e63946' if val > 0 else '#457b9d' if val < 0 else '#212529'
-        return f'color: {color}; font-weight: bold;'
-
+    result_list.append(["💰 예수금", None, None, None, int(total_cash), None, round(total_cash/total_asset*100, 1)])
+    df_final = pd.DataFrame(result_list, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+    
     st.dataframe(df_final.style.format({
         "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
         "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
         "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
         "평가액": "{:,.0f}", "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-", "비중(%)": "{:.1f}%"
-    }).map(style_profit, subset=['수익률']), use_container_width=True, hide_index=True)
-
-else:
-    st.info("시트에 데이터를 입력해주세요. (주식 종목 혹은 '예수금' 항목)")
+    }).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']), use_container_width=True, hide_index=True)
