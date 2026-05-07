@@ -35,7 +35,7 @@ def get_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📂 3. 데이터 로드 로직
+# 📂 3. 데이터 로드 및 계산 기초 데이터
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 HISTORY_GID = "144293082"
@@ -48,7 +48,7 @@ def load_data(gid):
 selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 portfolio, total_cash = {}, 0
 
-# 계좌별 데이터 합산
+# 계좌별 잔고 및 종목 처리
 for name, gid in TAB_INFO.items():
     if selected_account != "전체 계좌" and selected_account != name: continue
     df_acc = load_data(gid)
@@ -98,21 +98,21 @@ total_profit_val = total_eval_sum - total_buy_sum
 st.divider()
 st.subheader("📈 계좌 변동 및 요약")
 
-# 📉 6. 기간별 변동 (옵션 1: 시트 행 순서 기준 비교)
+# 📉 6. 기간별 변동 (옵션 1: 시트 마지막 행 기준)
 df_h = load_data(HISTORY_GID)
 
-def get_comparison_by_row(offset):
-    """시트의 마지막 행을 기준으로 과거 행과의 차액 계산"""
-    if len(df_h) < offset + 1: return 0, 0
+def get_comparison_by_index(offset):
+    """행 번호를 기준으로 과거 데이터를 가져와 에러 방지"""
+    if df_h.empty or len(df_h) < offset + 1: return 0, 0
     try:
-        # 마지막 행 = 오늘, 마지막-offset 행 = 과거 기준점
+        # 마지막 행은 '오늘' 입력값, offset만큼 뺀 행은 '과거' 기준점
         target_row = df_h.iloc[-(offset + 1)] 
         
         if selected_account == "전체 계좌":
             past_val = (pd.to_numeric(str(target_row.iloc[1]).replace(',', ''), errors='coerce') or 0) + \
                        (pd.to_numeric(str(target_row.iloc[2]).replace(',', ''), errors='coerce') or 0)
         else:
-            # 기본계좌 인덱스 1, 한투계좌 인덱스 2
+            # 기본계좌=1번 열, 한투계좌=2번 열 고정
             col_idx = 1 if selected_account == "기본 계좌" else 2
             past_val = pd.to_numeric(str(target_row.iloc[col_idx]).replace(',', ''), errors='coerce') or 0
             
@@ -133,10 +133,10 @@ summary_html = f"""
 """
 st.markdown(summary_html, unsafe_allow_html=True)
 
-# 전일/전주/전월 대비 (행 기반 계산)
+# 전일/전주/전월 대비 (행 인덱스 기반)
 metrics_html = '<div class="card-container">'
 for label, offset in [("전일대비", 1), ("전주대비", 7), ("전월대비", 30)]:
-    v, r = get_comparison_by_row(offset)
+    v, r = get_comparison_by_index(offset)
     cls = "up" if v > 0 else "down" if v < 0 else ""
     metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
 st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
