@@ -48,6 +48,7 @@ def load_data(gid):
 selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 portfolio, total_cash = {}, 0
 
+# 시트 데이터 처리 (수량 및 원가)
 for name, gid in TAB_INFO.items():
     if selected_account != "전체 계좌" and selected_account != name: continue
     df_acc = load_data(gid)
@@ -74,7 +75,7 @@ for name, gid in TAB_INFO.items():
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 st.title(f"📊 {selected_account}")
 
-# 💹 4. [복구] 상단 실시간 종목 시세 카드
+# 💹 4. [복구 완료] 상단 실시간 종목 시세 카드
 price_dict = {n: get_live_price(portfolio[n]["code"]) for n in active_stocks}
 if active_stocks:
     st.subheader("💹 실시간 종목 시세")
@@ -83,36 +84,31 @@ if active_stocks:
         stock_html += f'<div class="custom-card"><div class="card-label">{name}</div><div class="card-value">{price_dict[name]:,}</div></div>'
     st.markdown(stock_html + '</div>', unsafe_allow_html=True)
 
-# 📊 5. 자산 요약 계산
+# 📊 5. 자산 합산 및 공식 고정
 total_buy_sum = sum(portfolio[n]["total_cost"] for n in active_stocks)
 total_eval_sum = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks)
 current_total_asset = total_cash + total_eval_sum 
 total_profit_val = total_eval_sum - total_buy_sum
 
+# 📈 6. 기간별 변동 (전일/전주/전월 대비)
 st.divider()
 st.subheader("📈 계좌 변동 및 요약")
-
-# 📉 6. 기간별 변동 계산 (날짜 매칭 강화)
 df_h = load_data(HISTORY_GID)
 
 def get_comparison(days):
     if df_h.empty: return 0, 0
     h = df_h.copy()
-    # 날짜 컬럼에서 숫자만 추출하여 비교 (예: 2026. 5. 6 -> 20260506)
-    def clean_date(x): return re.sub(r'[^0-9]', '', str(x))
+    # 시트의 날짜 형식(2026. 5. 6.)을 숫자(20260506)로 변환
+    h['clean_dt'] = h.iloc[:, 0].apply(lambda x: re.sub(r'[^0-9]', '', str(x)))
     
-    # 기준일 설정 (사용자 시트의 마지막 날짜인 2026년 5월 6일 기준)
-    base_date = datetime.date(2026, 5, 6)
+    base_date = datetime.date(2026, 5, 7) # 오늘 기준
     target_date = base_date - datetime.timedelta(days=days)
     target_str = target_date.strftime("%Y%m%d")
     
-    # 시트 날짜 정규화 후 매칭
-    h['clean_dt'] = h.iloc[:, 0].apply(clean_date)
+    # 해당 날짜를 찾거나 없으면 그 이전 가장 가까운 날 탐색
     row = h[h['clean_dt'] == target_str].head(1)
-    
-    # 만약 해당 날짜가 없으면 그 이전 날짜 중 가장 가까운 날짜 탐색
     if row.empty:
-        row = h[h['clean_dt'] < target_str].head(1)
+        row = h[h['clean_dt'] < target_str].sort_values('clean_dt', ascending=False).head(1)
 
     if row.empty: return 0, 0
     
@@ -127,7 +123,7 @@ def get_comparison(days):
     diff = current_total_asset - past_val
     return diff, (diff/past_val*100)
 
-# 카드 렌더링 (요약 + 변동)
+# 카드 렌더링: 요약 항등식 (매수액 + 수익 + 예수금 = 총잔고)
 p_cls = "up" if total_profit_val > 0 else "down" if total_profit_val < 0 else ""
 summary_html = f"""
 <div class="card-container">
@@ -138,6 +134,7 @@ summary_html = f"""
 """
 st.markdown(summary_html, unsafe_allow_html=True)
 
+# 기간별 변동 카드
 metrics_html = '<div class="card-container">'
 for label, days in [("전일대비", 1), ("전주대비", 7), ("전월대비", 30)]:
     v, r = get_comparison(days)
