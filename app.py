@@ -35,7 +35,7 @@ def get_live_price(code):
         return int(res['result']['areas'][0]['datas'][0]['nv'])
     except: return 0
 
-# 📂 3. 데이터 로드 및 계산 로직
+# 📂 3. 데이터 로드
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw/export?format=csv"
 TAB_INFO = {"기본 계좌": "0", "한국투자증권": "1939408144"}
 HISTORY_GID = "144293082"
@@ -48,7 +48,7 @@ def load_data(gid):
 selected_account = st.sidebar.selectbox("계좌 선택", ["전체 계좌"] + list(TAB_INFO.keys()))
 portfolio, total_cash = {}, 0
 
-# 보유 종목 및 예수금 데이터 처리
+# 포트폴리오 계산 로직
 for name, gid in TAB_INFO.items():
     if selected_account != "전체 계좌" and selected_account != name: continue
     df_acc = load_data(gid)
@@ -80,7 +80,7 @@ for name, gid in TAB_INFO.items():
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 st.title(f"📊 {selected_account}")
 
-# 💹 4. 실시간 시세 카드 (복구)
+# 💹 4. 실시간 종목 시세 카드
 price_dict = {n: get_live_price(portfolio[n]["code"]) for n in active_stocks}
 if active_stocks:
     st.subheader("💹 실시간 종목 시세")
@@ -89,7 +89,7 @@ if active_stocks:
         stock_html += f'<div class="custom-card"><div class="card-label">{name}</div><div class="card-value">{price_dict[name]:,}</div></div>'
     st.markdown(stock_html + '</div>', unsafe_allow_html=True)
 
-# 📊 5. 자산 요약 (총매수 + 총수익 + 예수금 = 총잔고)
+# 📊 5. 자산 요약 계산
 total_buy_sum = sum(portfolio[n]["total_cost"] for n in active_stocks)
 total_eval_sum = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks)
 current_total_asset = total_cash + total_eval_sum 
@@ -98,31 +98,33 @@ total_profit_val = total_eval_sum - total_buy_sum
 st.divider()
 st.subheader("📈 계좌 변동 및 요약")
 
-# 📉 6. 기간별 변동 (사용자 직접 입력값 기반 로직)
+# 📉 6. 기간별 변동 (옵션 1: 시트 행 순서 기준 최신 데이터 비교)
 df_h = load_data(HISTORY_GID)
 
-def get_comparison_from_sheet(offset):
-    """시트의 마지막 행을 기준으로 과거 데이터를 가져옴"""
+def get_comparison_by_row(offset):
+    """시트의 마지막 행(오늘 입력값)과 그 이전 행들을 비교"""
     if len(df_h) < offset + 1: return 0, 0
     try:
-        # 마지막 행이 '오늘'이면 offset=1은 '어제', offset=7은 '일주일 전'
+        # 마지막 행 = 오늘 기록, 마지막-offset 행 = 비교 대상 기록
         target_row = df_h.iloc[-(offset + 1)] 
         
         if selected_account == "전체 계좌":
             past_val = (pd.to_numeric(str(target_row.iloc[1]).replace(',', ''), errors='coerce') or 0) + \
                        (pd.to_numeric(str(target_row.iloc[2]).replace(',', ''), errors='coerce') or 0)
         else:
-            # 기본계좌는 인덱스 1, 한투계좌는 인덱스 2 고정
+            # 기본계좌 인덱스 1, 한투계좌 인덱스 2 고정
             col_idx = 1 if selected_account == "기본 계좌" else 2
             past_val = pd.to_numeric(str(target_row.iloc[col_idx]).replace(',', ''), errors='coerce') or 0
             
         if past_val == 0: return 0, 0
+        
+        # 현재 실시간 총자산과 시트에 적힌 과거 자산 비교
         diff = current_total_asset - past_val
         return diff, (diff/past_val*100)
     except:
         return 0, 0
 
-# 요약 카드 렌더링
+# 요약 카드 출력
 p_cls = "up" if total_profit_val > 0 else "down" if total_profit_val < 0 else ""
 summary_html = f"""
 <div class="card-container">
@@ -133,10 +135,10 @@ summary_html = f"""
 """
 st.markdown(summary_html, unsafe_allow_html=True)
 
-# 전일/전주/전월 대비 (시트 행 순서 기준)
+# 전일/전주/전월 대비 카드 (시트 행 기준)
 metrics_html = '<div class="card-container">'
 for label, offset in [("전일대비", 1), ("전주대비", 7), ("전월대비", 30)]:
-    v, r = get_comparison_from_sheet(offset)
+    v, r = get_comparison_by_row(offset)
     cls = "up" if v > 0 else "down" if v < 0 else ""
     metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
 st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
