@@ -111,7 +111,7 @@ st.markdown(summary_html, unsafe_allow_html=True)
 
 # 📉 6. 기간별 변동 (전일/전주/전월)
 df_h = load_data(HISTORY_GID)
-st.write(df_h.iloc[:, 0].head(5).tolist())
+
 def get_comparison(days):
     if df_h.empty: return 0, 0
     h = df_h.copy()
