@@ -9,7 +9,7 @@ st.set_page_config(page_title="자산 관리 대시보드", layout="wide")
 def load_history_data():
     try:
         # secrets.toml에 등록된 spreadsheet_id 사용
-        spreadsheet_id = st.secrets["gsheets"]["spreadsheet_id"]
+        spreadsheet_id = st.secrets["gsheets"]  ["1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw"]
         # HISTORY 시트의 GID (보통 첫 번째 시트는 0)
         gid = "0" 
         url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
