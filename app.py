@@ -54,25 +54,24 @@ for name, gid in TAB_INFO.items():
     for _, row in df_acc.iterrows():
         item = str(row.iloc[1]).strip()
         if not item or item in ["종목", "nan"]: continue
-        
+
         val = pd.to_numeric(str(row.iloc[3]).replace(',', ''), errors='coerce') or 0
         if "예수금" in item:
             total_cash += val
             continue
-            
+
         qty = pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0
         action = str(row.iloc[4]).strip()
         code = str(row.iloc[5]).strip() if len(row) > 5 else ""
-        
+
         if item not in portfolio:
             portfolio[item] = {"qty": 0, "total_cost": 0, "code": code}
-        
+
         if action == "매수":
             portfolio[item]["qty"] += qty
             portfolio[item]["total_cost"] += (qty * val)
         elif action == "매도":
             if portfolio[item]["qty"] > 0:
-                # 현재 보유 중인 평균 단가로 매도 원가를 털어냄
                 avg_unit_cost = portfolio[item]["total_cost"] / portfolio[item]["qty"]
                 portfolio[item]["qty"] -= qty
                 portfolio[item]["total_cost"] -= (qty * avg_unit_cost)
@@ -80,7 +79,7 @@ for name, gid in TAB_INFO.items():
 active_stocks = [n for n, d in portfolio.items() if d["qty"] > 0]
 st.title(f"📊 {selected_account}")
 
-# 💹 4. 실시간 종목 시세 카드 (복구됨)
+# 💹 4. 실시간 종목 시세 카드
 price_dict = {n: get_live_price(portfolio[n]["code"]) for n in active_stocks}
 if active_stocks:
     st.subheader("💹 실시간 종목 시세")
@@ -89,16 +88,15 @@ if active_stocks:
         stock_html += f'<div class="custom-card"><div class="card-label">{name}</div><div class="card-value">{price_dict[name]:,}</div></div>'
     st.markdown(stock_html + '</div>', unsafe_allow_html=True)
 
-# 📊 5. 자산 요약 계산 (수치 항등식 고정)
-total_buy_sum = sum(portfolio[n]["total_cost"] for n in active_stocks) # 총매수액
-total_eval_sum = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks) # 총평가액
-current_total_asset = total_cash + total_eval_sum # 총잔고 (평가액 + 예수금)
-total_profit_val = total_eval_sum - total_buy_sum # 총수익
+# 📊 5. 자산 요약 계산
+total_buy_sum = sum(portfolio[n]["total_cost"] for n in active_stocks)
+total_eval_sum = sum(portfolio[n]["qty"] * price_dict[n] for n in active_stocks)
+current_total_asset = total_cash + total_eval_sum
+total_profit_val = total_eval_sum - total_buy_sum
 
 st.divider()
 st.subheader("📈 계좌 변동 및 요약")
 
-# 요약 카드 출력
 p_cls = "up" if total_profit_val > 0 else "down" if total_profit_val < 0 else ""
 summary_html = f"""
 <div class="card-container">
@@ -109,32 +107,69 @@ summary_html = f"""
 """
 st.markdown(summary_html, unsafe_allow_html=True)
 
-# 📉 6. 기간별 변동 (전일/전주/전월)
+# 📉 6. 기간별 변동 (전일/전주/전월) - 구글시트 변동값 직접 읽기
 df_h = load_data(HISTORY_GID)
 
-def get_comparison(days):
-    if df_h.empty: return 0, 0
-    h = df_h.copy()
-    h.iloc[:, 0] = h.iloc[:, 0].apply(lambda x: re.sub(r'[^0-9\.]', '', str(x)).strip('.'))
-    target_date = datetime.date(2026, 5, 6) - datetime.timedelta(days=days)
-    target_str = target_date.strftime("%Y.%m.%d")
-    row = h[h.iloc[:, 0].str.contains(target_str, na=False)].head(1)
-    if row.empty: return 0, 0
-    if selected_account == "전체 계좌":
-        past_val = (pd.to_numeric(str(row.iloc[1]).replace(',', ''), errors='coerce') or 0) + \
-                   (pd.to_numeric(str(row.iloc[2]).replace(',', ''), errors='coerce') or 0)
-    else:
-        col = 1 if selected_account == "기본 계좌" else 2
-        past_val = pd.to_numeric(str(row.iloc[col]).replace(',', ''), errors='coerce') or 0
-    if past_val == 0: return 0, 0
-    diff = current_total_asset - past_val
-    return diff, (diff/past_val*100)
+def get_changes_from_sheet():
+    if df_h.empty:
+        return {"전일대비": (0, 0), "전주대비": (0, 0), "전월대비": (0, 0)}
 
+    h = df_h.copy()
+    h.iloc[:, 0] = h.iloc[:, 0].apply(lambda x: str(x).strip())
+
+    # 오늘 날짜 문자열 생성 → "2026. 5. 8" 형식
+    today = datetime.date.today()
+    today_str = f"{today.year}. {today.month}. {today.day}"
+    row = h[h.iloc[:, 0] == today_str]
+
+    # 오늘 데이터 없으면 가장 마지막 날짜 행 사용
+    if row.empty:
+        date_rows = h[h.iloc[:, 0].str.match(r'^\d{4}\.\s*\d+\.\s*\d+$', na=False)]
+        if date_rows.empty:
+            return {"전일대비": (0, 0), "전주대비": (0, 0), "전월대비": (0, 0)}
+        row = date_rows.tail(1)
+
+    def get_val(col_idx):
+        try:
+            return pd.to_numeric(str(row.iloc[0, col_idx]).replace(',', ''), errors='coerce') or 0
+        except:
+            return 0
+
+    # 컬럼 인덱스 (구글시트 기준):
+    # 0=날짜, 1=기본계좌, 2=한투계좌, 3=총자산
+    # 4=기본대차(전일), 5=한투대차(전일)
+    # 6=주간변동-기본, 7=월간변동-기본
+    # 8=주간변동-한투, 9=월간변동-한투
+    # 10=주간변동-합산, 11=월간변동-합산
+
+    if selected_account == "전체 계좌":
+        daily   = get_val(4) + get_val(5)
+        weekly  = get_val(10)
+        monthly = get_val(11)
+    elif selected_account == "기본 계좌":
+        daily   = get_val(4)
+        weekly  = get_val(6)
+        monthly = get_val(7)
+    else:  # 한국투자증권
+        daily   = get_val(5)
+        weekly  = get_val(8)
+        monthly = get_val(9)
+
+    def to_rate(val, base):
+        return (val / base * 100) if base != 0 else 0
+
+    return {
+        "전일대비": (daily,   to_rate(daily,   current_total_asset)),
+        "전주대비": (weekly,  to_rate(weekly,  current_total_asset)),
+        "전월대비": (monthly, to_rate(monthly, current_total_asset)),
+    }
+
+changes = get_changes_from_sheet()
 metrics_html = '<div class="card-container">'
-for label, days in [("전일대비", 1), ("전주대비", 7), ("전월대비", 30)]:
-    v, r = get_comparison(days)
+for label in ["전일대비", "전주대비", "전월대비"]:
+    v, r = changes[label]
     cls = "up" if v > 0 else "down" if v < 0 else ""
-    metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
+    metrics_html += f'<div class="custom-card"><div class="card-label">{label}</div><div class="card-value {cls}">{int(v):+,}</div><div class="card-delta {cls}">{r:+.2f}%</div></div>'
 st.markdown(metrics_html + '</div>', unsafe_allow_html=True)
 
 # 📋 7. 보유 종목 리스트
@@ -155,5 +190,5 @@ st.dataframe(df_res.style.format({
     "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
     "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
     "평가액": "{:,.0f}", "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-", "비중(%)": "{:.1f}%"
-}).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']), 
+}).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']),
 use_container_width=True, hide_index=True)
