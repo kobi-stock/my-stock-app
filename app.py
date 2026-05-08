@@ -8,7 +8,7 @@ st.set_page_config(page_title="자산 관리 대시보드", layout="wide")
 @st.cache_data(ttl=60)
 def load_data():
     # 💡 [필독] 실제 구글 시트 ID로 교체하세요! (주소창의 d/ 와 /edit 사이 값)
-    spreadsheet_id = 1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw"" 
+    spreadsheet_id = "1VINP813y8g2d05Y0SZNTgo63jVvIcYHvxJqaZ7D7Kbw" 
     url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid=0"
     
     try:
