@@ -181,14 +181,17 @@ for n in active_stocks:
     qty = portfolio[n]["qty"]
     ba = portfolio[n]["total_cost"] / qty
     ev = qty * cp
-    res_list.append([n, qty, int(ba), cp, int(ev), ((cp-ba)/ba*100), (ev/current_total_asset*100)])
-res_list.append(["💰 예수금", None, None, None, int(total_cash), None, (total_cash/current_total_asset*100)])
+    res_list.append([n, qty, int(ba), cp, int(ev), int(ev - portfolio[n]["total_cost"]), ((cp-ba)/ba*100), (ev/current_total_asset*100)])
+res_list.append(["💰 예수금", None, None, None, int(total_cash), None, None, (total_cash/current_total_asset*100)])
 
-df_res = pd.DataFrame(res_list, columns=["종목", "수량", "평단", "현재가", "평가액", "수익률", "비중(%)"])
+df_res = pd.DataFrame(res_list, columns=["종목", "수량", "평단", "현재가", "평가액", "수익금액", "수익률", "비중(%)"])
 st.dataframe(df_res.style.format({
     "수량": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
     "평단": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
     "현재가": lambda x: f"{int(x):,}" if pd.notnull(x) else "-",
-    "평가액": "{:,.0f}", "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-", "비중(%)": "{:.1f}%"
-}).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익률']),
+    "평가액": "{:,.0f}",
+    "수익금액": lambda x: f"{int(x):+,}" if pd.notnull(x) else "-",
+    "수익률": lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-",
+    "비중(%)": "{:.1f}%"
+}).map(lambda v: f'color: {"#e63946" if v > 0 else "#457b9d" if v < 0 else "#212529"}; font-weight: bold;' if isinstance(v, (int, float)) else '', subset=['수익금액', '수익률']),
 use_container_width=True, hide_index=True)
